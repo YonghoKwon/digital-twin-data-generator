@@ -1,5 +1,5 @@
 import { active } from '../api.js';
-import { el, page, panel, badge, help, empty, code, errorBox, actionButton, toast } from '../components/ui.js';
+import { time, el, page, panel, badge, help, empty, code, errorBox, actionButton, toast } from '../components/ui.js';
 
 export default function dashboard(root, scope) {
   const updated = el('span', { class: 'help' }, '상태를 확인하고 있습니다…');
@@ -50,7 +50,7 @@ export default function dashboard(root, scope) {
       if (list?.length > 5) content.append(help(`외 ${list.length - 5}개 · 관리 화면에서 전체 확인`));
       lists.append(panel(title, content));
     }
-    const mockStatus = mock ? el('div', {}, el('div', { class: 'actions' }, badge(mock.lastReloadSuccessful ? 'RUNNING' : 'FAILED'), `${mock.routeCount}개 route`), help(`마지막 로드: ${mock.lastReloadAt || '없음'}`), mock.lastReloadError ? el('div', { class: 'error' }, mock.lastReloadError) : help('마지막 로드 오류 없음'), el('a', { href: '#/mock' }, 'REST Mock 관리 →')) : empty('REST Mock 상태를 읽지 못했습니다.');
+    const mockStatus = mock ? el('div', {}, el('div', { class: 'actions' }, badge(mock.lastReloadSuccessful ? 'LOADED' : 'FAILED'), `${mock.routeCount}개 route`), help(`마지막 로드: ${time(mock.lastReloadAt)}`), mock.lastReloadError ? el('div', { class: 'error' }, mock.lastReloadError) : help('마지막 로드 오류 없음'), el('a', { href: '#/mock' }, 'REST Mock 관리 →')) : empty('REST Mock 상태를 읽지 못했습니다.');
     lists.append(panel('REST Mock', mockStatus));
     updated.textContent = `${new Date().toLocaleTimeString('ko-KR')} 갱신 · 3초 주기${problems.length ? ' · 일부 조회 실패' : ''}`;
   }, 3000);

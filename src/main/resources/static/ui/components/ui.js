@@ -20,6 +20,12 @@ export const help = text => el('p', { class: 'help' }, text);
 export const empty = text => el('div', { class: 'empty' }, text);
 export const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 export const code = value => el('pre', {}, pretty(value) ?? '');
+// ISO 시각(나노초 포함 가능)을 'YYYY. M. D. 오전 hh:mm:ss' 형식으로. 값이 없거나 읽을 수 없으면 대체 문자열.
+export const time = (value, fallback = '없음') => {
+  if (!value) return fallback;
+  const date = new Date(String(value).replace(/(\.\d{3})\d+/, '$1'));
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('ko-KR');
+};
 export const badge = state => el('span', { class: `badge ${/^[A-Z_]+$/.test(state || '') ? state : ''}` }, state || 'UNKNOWN');
 export function field(label, value = '', options = {}) {
   const input = el('input', { type: 'text', value, ...options });

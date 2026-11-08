@@ -1,5 +1,5 @@
 import { segment } from '../api.js';
-import { el, page, panel, help, empty, badge, button, check, table, jsonEditor, errorBox, resultBox, actionButton } from '../components/ui.js';
+import { el, time, page, panel, help, empty, badge, button, check, table, jsonEditor, errorBox, resultBox, actionButton } from '../components/ui.js';
 
 const example = { id: 'sensor-status', method: 'GET', path: '/sensors/{id}', status: 200, headers: { 'Content-Type': 'application/json' }, body: '{"status":"OK"}', enabled: true };
 
@@ -39,7 +39,7 @@ export default function mock(root, scope) {
     }
     if (results[1].status === 'fulfilled') {
       const value = results[1].value;
-      status.replaceChildren(el('div', { class: 'panel-head' }, help(`총 ${value.routeCount}개 route · 마지막 reload ${value.lastReloadAt || '없음'}`), badge(value.lastReloadSuccessful ? 'RUNNING' : 'FAILED')), value.lastReloadError ? el('div', { class: 'error' }, value.lastReloadError) : null);
+      status.replaceChildren(...[el('div', { class: 'panel-head' }, help(`총 ${value.routeCount}개 route · 마지막 reload ${time(value.lastReloadAt)}`), badge(value.lastReloadSuccessful ? 'LOADED' : 'FAILED')), value.lastReloadError ? el('div', { class: 'error' }, value.lastReloadError) : null].filter(Boolean));
     }
     if (results[2].status === 'fulfilled') {
       const values = results[2].value;
