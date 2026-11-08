@@ -230,8 +230,11 @@ public class SubscriptionService implements SmartLifecycle {
         }
 
         private synchronized List<ReceivedMessage> messages(int limit, Long afterSeq, String messageId) {
-            return buffer.stream().filter(m -> afterSeq == null || m.seq() > afterSeq)
-                    .filter(m -> messageId == null || messageId.equals(m.messageId())).limit(limit).toList();
+            var matches = buffer.stream().filter(m -> afterSeq == null || m.seq() > afterSeq)
+                    .filter(m -> messageId == null || messageId.equals(m.messageId()));
+            if (afterSeq != null) return matches.limit(limit).toList();
+            var latest = matches.toList();
+            return latest.subList(Math.max(0, latest.size() - limit), latest.size());
         }
 
         private synchronized void clear() { buffer.clear(); }

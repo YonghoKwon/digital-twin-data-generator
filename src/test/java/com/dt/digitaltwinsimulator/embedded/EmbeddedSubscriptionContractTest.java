@@ -194,6 +194,31 @@ class EmbeddedSubscriptionContractTest {
         assertThat(json(missing).get("error").asText()).isEqualTo("SUBSCRIPTION_NOT_FOUND");
     }
 
+    @Test void latestQueriesAndCursorQueriesApplyMessageIdBeforeLimit() throws Exception {
+        String id = create("latest", "s4.latest", 10, 100);
+        var settings = connections.resolve(null, null, null, "s4.latest");
+        for (int i = 1; i <= 6; i++) {
+            publisher.publish(settings, settings.topic(),
+                    "{\"MESSAGE_ID\":\"" + (i % 2 == 0 ? "match" : "other") + "\",\"index\":" + i + "}", Map.of());
+        }
+        waitCount(id, 6);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=2")), 5, 6);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=2&afterSeq=0")), 1, 2);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=2&afterSeq=2")), 3, 4);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=2&messageId=match")), 4, 6);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=2&afterSeq=0&messageId=match")), 2, 4);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=2&afterSeq=2&messageId=match")), 4, 6);
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?messageId=missing")));
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?afterSeq=6")));
+        assertSeqs(json(get("/dt/subscriptions/" + id + "/messages?limit=10")), 1, 2, 3, 4, 5, 6);
+    }
+
+    private void assertSeqs(JsonNode messages, long... expected) {
+        var actual = new ArrayList<Long>();
+        messages.forEach(message -> actual.add(message.get("seq").asLong()));
+        assertThat(actual).containsExactly(Arrays.stream(expected).boxed().toArray(Long[]::new));
+    }
+
     @Test void apiEnforcesValidationDuplicateAndCapacityWithErrorEnvelope() throws Exception {
         var invalid = request("POST", "/dt/subscriptions", "{\"topic\":\" \"}");
         assertThat(invalid.statusCode()).isEqualTo(400);
