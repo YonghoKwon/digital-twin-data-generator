@@ -78,6 +78,29 @@ export function filterMessages(messages, { topic = '', messageId = '' } = {}) {
   return messages.filter(message => (!topic || String(message.topic || '').toLowerCase().includes(topic.toLowerCase())) &&
     (!messageId || message.messageId === messageId));
 }
+export function classifyAddresses(addresses = []) {
+  const topics = [], simulator = [];
+  for (const address of addresses) {
+    const name = String(address.name || '');
+    if (!name || /^(?:activemq\.|\$)/i.test(name)) continue;
+    (/[#*]/.test(name) ? simulator : topics).push(address);
+  }
+  return { topics, simulator };
+}
+export function subscriptionSelection(values, selected, saved) {
+  const ids = values.map(value => value.subscriptionId);
+  if (ids.includes(selected)) return selected;
+  if (ids.includes(saved)) return saved;
+  return ids.length === 1 ? ids[0] : null;
+}
+export function localTimestamp(value, { timeOnly = false } = {}) {
+  if (!value) return '없음';
+  const date = new Date(String(value).replace(/(\.\d{3})\d+/, '$1'));
+  if (Number.isNaN(date.getTime())) return String(value);
+  const pad = (part, length = 2) => String(part).padStart(length, '0');
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+  return timeOnly ? clock : `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
+}
 export function collectSuggestions({ broker, streams = [], subscriptions = [], scenarios = [], recent = [] } = {}) {
   const topics = new Set(), messageIds = new Set();
   function add(value) {

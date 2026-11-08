@@ -2,7 +2,7 @@ import { createScope, segment } from '../api.js';
 import { MessageBuffer } from '../components/message-buffer.js';
 import { brokerFields } from '../components/message-form.js';
 import { el, page, panel, help, empty, badge, field, numeric, button, errorBox, actionButton, toast, table, code, check, confirmAction, copyText, primaryAction } from '../components/ui.js';
-import { readState, writeState, filterMessages, CounterRate } from '../components/state.js';
+import { readState, writeState, filterMessages, CounterRate, subscriptionSelection, localTimestamp } from '../components/state.js';
 import { rememberMessage } from '../components/plant.js';
 
 export default function subscriptions(root, scope) {
@@ -22,7 +22,7 @@ export default function subscriptions(root, scope) {
   root.append(errors.node, pollErrors.node, el('div', { class: 'grid subscription-grid' }, el('div', { class: 'stack' }, panel('구독 목록', list), formPanel), panel('실시간 메시지', viewer)));
   let selected = null, connectionScope;
   const summaries = new Map();
-  const rates = new CounterRate(); let restoreSelection = true;
+  const rates = new CounterRate();
   scope.add(() => connectionScope?.dispose());
   async function refresh() {
     try {
@@ -35,8 +35,9 @@ export default function subscriptions(root, scope) {
           value.lastError ? el('div', { class: 'error' }, value.lastError) : null,
           actionButton('구독 삭제', errors, async () => { if (!await confirmAction(value.subscriptionId, '구독 삭제')) return; await scope.request(`/dt/subscriptions/${segment(value.subscriptionId)}`, { method: 'DELETE' }); if (selected === value.subscriptionId) closeViewer(); toast(`구독을 삭제했습니다. ${value.subscriptionId}`); await refresh(); }, 'small danger')));
       }
+      const nextSelection = subscriptionSelection(values, selected, readState('selected-subscription'));
       if (selected && !summaries.has(selected)) closeViewer();
-      if (restoreSelection) { restoreSelection = false; const saved = readState('selected-subscription'); if (summaries.has(saved)) open(saved); }
+      if (nextSelection && nextSelection !== selected) open(nextSelection);
     } catch (error) { pollErrors.show(error); }
   }
   function closeViewer() { connectionScope?.dispose(); connectionScope = null; selected = null; writeState('selected-subscription', null); viewer.replaceChildren(empty('메시지를 확인할 구독을 선택하세요.', '구독 추가', () => topic.input.focus())); }
@@ -53,7 +54,7 @@ export default function subscriptions(root, scope) {
     const filter = field('Message ID 필터   완전 일치', '', { placeholder: '예: SENSOR' });
     const topicFilter = field('Topic 부분 검색', '');
     const follow = check('최신 따라가기', true), topicCounts = el('div');
-    let paused = false, stream, timer, recovery = false, retry = 1000, renderTimer;
+    let paused = false, stream, timer, recovery = false, retry = 1000, renderTimer, selectedMessage = null;
     const pause = button('화면 일시정지', () => { paused = !paused; pause.textContent = paused ? '화면 재개' : '화면 일시정지'; if (!paused) render(); });
     const snapshot = actionButton('필터 조회', localErrors, async () => {
       const query = new URLSearchParams({ limit: String(Math.min(500, summaries.get(subscriptionId)?.bufferSize || 500)) });
@@ -64,14 +65,14 @@ export default function subscriptions(root, scope) {
     filter.input.addEventListener('input', () => { if (!paused) render(); });
     topicFilter.input.addEventListener('input', render);
     viewer.replaceChildren(el('div', { class: 'panel-head' }, el('strong', {}, subscriptionId), status), help('화면 보관 최대 500건   일시정지는 화면 갱신만 멈춥니다. 구독과 수신은 계속됩니다.'),
-      el('div', { class: 'row' }, topicFilter.node, filter.node, snapshot), el('div', { class: 'actions' }, pause, follow.node, actionButton('서버 버퍼 비우기', localErrors, async () => { if (!await confirmAction(subscriptionId, '서버 버퍼 비우기')) return; await child.request(`${url}/messages`, { method: 'DELETE' }); if (!child.alive) return; buffer.clear(); detail.replaceChildren(); render(); }, 'small'), total), warning, localErrors.node, topicCounts, rows, detail);
+      el('div', { class: 'row' }, topicFilter.node, filter.node, snapshot), el('div', { class: 'actions' }, pause, follow.node, actionButton('서버 버퍼 비우기', localErrors, async () => { if (!await confirmAction(subscriptionId, '서버 버퍼 비우기')) return; await child.request(`${url}/messages`, { method: 'DELETE' }); if (!child.alive) return; buffer.clear(); selectedMessage = null; detail.replaceChildren(); render(); }, 'small'), total), warning, localErrors.node, topicCounts, rows, detail);
     primaryAction(viewer, snapshot);
     function showDetail(message) {
       const body = message.bodyJson ?? message.body ?? message.bodyBase64Head;
       const raw = code(body);
       const fold = el('details', { open: true }, el('summary', {}, '본문 JSON / 원문'), raw);
       detail.replaceChildren(el('div', { class: 'panel-head' }, el('h3', {}, `메시지 ${message.seq}`), actionButton('본문 복사', localErrors, () => copyText(typeof body === 'string' ? body : JSON.stringify(body, null, 2)))),
-        table(['항목', '값'], [['시각', message.receivedAt], ['Topic', message.topic], ['MESSAGE_ID', message.messageId || '없음'], ['형식', `${message.type} / ${message.encoding}`], ['크기', `${message.sizeBytes} bytes${message.truncated ? ' (잘림)' : ''}`]]),
+        table(['항목', '값'], [['시각', el('time', { dateTime: message.receivedAt, title: message.receivedAt }, localTimestamp(message.receivedAt))], ['Topic', message.topic], ['MESSAGE_ID', message.messageId || '없음'], ['형식', `${message.type} / ${message.encoding}`], ['크기', `${message.sizeBytes} bytes${message.truncated ? ' (잘림)' : ''}`]]),
         fold, el('h3', {}, 'Properties'), table(['이름', '값'], Object.entries(message.properties || {})), actionButton('전체 메시지 복사', localErrors, () => copyText(JSON.stringify(message, null, 2))));
     }
     function render() {
@@ -81,13 +82,33 @@ export default function subscriptions(root, scope) {
       const counts = new Map(); for (const message of buffer.values()) counts.set(message.topic, (counts.get(message.topic) || 0) + 1);
       topicCounts.replaceChildren(el('details', {}, el('summary', {}, 'Topic별 수신 수 (화면 보관 기준)'), table(['Topic', '수신 수'], [...counts])));
       rows.replaceChildren(); total.textContent = `표시 ${messages.length}건 / 보관 ${buffer.records.size}건   seq ${buffer.cursor}`;
+      const messageTable = table(['시각', 'Topic', 'MESSAGE_ID', '크기', '형식'], messages.map(message => [
+        el('time', { dateTime: message.receivedAt, title: message.receivedAt }, localTimestamp(message.receivedAt, { timeOnly: true })), message.topic, message.messageId || '', message.sizeBytes, `${message.type} / ${message.encoding}`
+      ]));
+      messageTable.classList.add('message-table');
+      const messageRows = [...messageTable.querySelectorAll('tbody tr')];
+      const selectedIndex = messages.findIndex(message => message.seq === selectedMessage);
+      function selectMessage(index, scrollIntoView = false) {
+        selectedMessage = messages[index].seq;
+        messageRows.forEach((row, at) => { row.setAttribute('aria-selected', String(at === index)); row.tabIndex = at === index ? 0 : -1; });
+        showDetail(messages[index]);
+        messageRows[index].focus({ preventScroll: true });
+        if (scrollIntoView) messageRows[index].scrollIntoView({ block: 'nearest' });
+      }
+      messageRows.forEach((row, index) => {
+        row.classList.add('selectable-row'); row.dataset.seq = messages[index].seq;
+        row.setAttribute('aria-selected', String(messages[index].seq === selectedMessage));
+        row.tabIndex = index === (selectedIndex < 0 ? 0 : selectedIndex) ? 0 : -1;
+        row.addEventListener('click', () => selectMessage(index));
+        row.addEventListener('keydown', event => {
+          if (!['ArrowUp', 'ArrowDown', 'Enter', ' '].includes(event.key)) return;
+          event.preventDefault();
+          const target = Math.max(0, Math.min(messages.length - 1, index + (event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0)));
+          selectMessage(target, true);
+        });
+      });
+      rows.append(messageTable);
       if (!messages.length) rows.append(empty('수신 메시지가 없습니다. Topic과 필터를 확인하세요.', '구독 추가', () => topic.input.focus()));
-      else rows.append(table(['시각', 'Topic', 'MESSAGE_ID', '크기', '형식'], messages.map(message => {
-        const date = new Date(message.receivedAt);
-        const stamp = Number.isNaN(date.getTime()) ? message.receivedAt : `${date.toLocaleTimeString('en-GB', { hour12: false })}.${String(date.getMilliseconds()).padStart(3, '0')}`;
-        const select = button(stamp, () => showDetail(message), 'small'); select.dataset.seq = message.seq;
-        return [select, message.topic, message.messageId || '', message.sizeBytes, `${message.type} / ${message.encoding}`];
-      }), index => showDetail(messages[index])));
       if (focusedSeq) rows.querySelector(`[data-seq="${focusedSeq}"]`)?.focus({ preventScroll: true });
       rows.scrollTop = follow.value ? rows.scrollHeight : scroll;
     }

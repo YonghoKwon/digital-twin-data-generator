@@ -41,6 +41,8 @@ nav .swagger { margin-top:18px; border-top:1px solid var(--rule); }
 .sidebar>button { margin:16px 10px; }
 .key { font-size:12px; color:var(--dim); font-weight:400; }
 main { margin:48px 0 0 132px; padding:22px 24px 40px; max-width:1488px; min-width:0; }
+/* Navigation focuses this landmark; it is not a control needing a full-page ring. */
+main:focus { outline:none; }
 .page-head,.panel-head,.card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:18px; align-items:start; }
 .stack { display:grid; gap:18px; }
@@ -79,11 +81,18 @@ summary { cursor:pointer; font-size:12px; color:var(--act); margin-bottom:8px; }
 .metrics { display:flex; flex-wrap:wrap; border-block:1px solid var(--rule); margin:10px 0; }
 .metrics>div { padding:6px 14px 6px 0; font-size:12px; color:var(--dim); }
 .metrics strong { display:block; color:var(--ink); font-size:18px; font-weight:500; }
+.metrics strong,.number { font-variant-numeric:tabular-nums; }
 .number { font-size:32px; font-stretch:semi-condensed; line-height:1.2; }
 .faceplate,.card { border-bottom:1px solid var(--rule); padding:14px 0; }
 .faceplate h3 { font-size:24px; }
 .faceplate.selected { border-left:3px solid var(--act); padding-left:10px; }
-.sparkline { display:block; width:100%; height:56px; }
+.faceplate .card-head { margin-bottom:6px; }
+.faceplate .card-head .help { margin:2px 0; }
+.faceplate .metrics { margin:6px 0; }
+.faceplate .metrics>div { padding-block:3px; }
+.stream-value { display:flex; align-items:center; gap:12px; }
+.stream-value .number { flex:none; white-space:nowrap; }
+.sparkline { display:block; flex:1; min-width:0; width:0; height:36px; }
 .table-wrap { overflow:auto; }
 table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 th,td { height:30px; padding:3px 8px; text-align:left; border-bottom:1px solid var(--rule); vertical-align:middle; overflow-wrap:anywhere; }
@@ -92,8 +101,17 @@ tbody tr:has(button):hover { background:color-mix(in srgb,var(--act) 5%,var(--fa
 .selected { border-color:var(--act); }
 .empty { padding:18px 0; color:var(--dim); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .message-list { max-height:390px; overflow:auto; overflow-anchor:none; }
+.message-list>.table-wrap { overflow:visible; }
+.message-list th,.event-log th { position:sticky; top:0; z-index:1; background:var(--face); }
+.message-list time { white-space:nowrap; }
+.message-list .selectable-row[aria-selected="true"] { outline:none; background:color-mix(in srgb,var(--act) 8%,var(--face)); }
+.message-list .selectable-row[aria-selected="true"]>td:first-child { border-left:3px solid var(--act); padding-left:5px; }
+.message-list .selectable-row:focus-visible { outline:2px solid var(--act); outline-offset:-2px; }
+.event-log { max-height:320px; overflow:auto; }
+.event-log>.table-wrap { overflow:visible; }
 .subscription-grid { grid-template-columns:minmax(250px,.7fr) minmax(0,1.8fr); }
 .message-detail { border-top:1px solid var(--rule); margin-top:12px; padding-top:12px; }
+.message-detail:empty { display:none; }
 .timeline { width:100%; display:block; height:180px; border:1px solid var(--rule); cursor:crosshair; }
 .separator { border-top:1px solid var(--rule); margin:18px 0; }
 .settings-block { white-space:pre-line; font-family:var(--din); border-left:3px solid var(--rule); padding:8px 12px; }

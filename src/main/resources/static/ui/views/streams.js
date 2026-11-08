@@ -33,17 +33,18 @@ export default function streams(root, scope) {
   }
   function renderTable() {
     list.hidden = mode !== 'face'; tableList.hidden = mode !== 'table'; toggle.textContent = mode === 'face' ? '표 보기' : '면 보기';
-    tableList.replaceChildren(values.length ? table(['이름', '상태', '실제 TPS', '전송', '실패', ''], values.map(value => [
+    tableList.replaceChildren(values.length ? table(['이름', '상태', '실제 TPS', '보냄', '실패', ''], values.map(value => [
       button(value.streamId, () => { writeState('selected-stream', value.streamId); mode = 'face'; renderTable(); cards.get(value.streamId)?.node.scrollIntoView({ block: 'nearest' }); }), badge(value.state), Number(value.actualTps).toFixed(2), value.sent, value.failed,
       actionButton('복제', errors, async () => duplicate(value), 'small')
     ])) : empty('실행한 스트림이 없습니다.', '새 스트림', () => form.node.querySelector('input').focus()));
+    if (mode === 'face') for (const card of cards.values()) card.draw();
   }
   function createCard(stream) {
     const state = el('span'), stats = el('div'), lastError = el('div', { class: 'error', hidden: true });
     const actual = el('div', { class: 'number' });
     const spark = el('canvas', { class: 'sparkline', role: 'img', 'aria-label': '최근 60초 TPS' }), samples = new SparkBuffer();
     const localErrors = errorBox();
-    const rate = field('rateTps', stream.rateTps, { type: 'number', min: 0.001, max: 5000, step: 'any' });
+    const rate = field('목표 TPS', stream.rateTps, { type: 'number', min: 0.001, max: 5000, step: 'any' });
     const slider = el('input', { type: 'range', min: 0.1, max: 5000, step: 0.1, value: stream.rateTps, 'aria-label': `${stream.streamId} 전송 속도` });
     let dirty = false;
     const url = `/dt/streams/${segment(stream.streamId)}`;
@@ -70,17 +71,20 @@ export default function streams(root, scope) {
       rate.value = Math.max(.001, Math.min(5000, current.rateTps * factor));
       await patch({ rateTps: Number(rate.value) });
     }, 'small'));
-    const node = el('article', { class: 'faceplate' }, el('div', { class: 'card-head' }, el('div', {}, button(stream.streamId, () => { writeState('selected-stream', stream.streamId); for (const [id, item] of cards) item.node.classList.toggle('selected', id === stream.streamId); }, 'tag-name'), help(`${stream.topic}   ${stream.messageId || 'RAW'}`)), state), actual, spark, stats,
+    const node = el('article', { class: 'faceplate' }, el('div', { class: 'card-head' }, el('div', {}, button(stream.streamId, () => { writeState('selected-stream', stream.streamId); for (const [id, item] of cards) item.node.classList.toggle('selected', id === stream.streamId); }, 'tag-name'), help(`${stream.topic}   ${stream.messageId || 'RAW'}`)), state), el('div', { class: 'stream-value' }, actual, spark), stats,
       el('div', { class: 'row' }, el('div', { class: 'grow' }, slider), rate.node, apply, speedButtons), el('div', { class: 'actions' }, pause, stop, actionButton('복제', localErrors, async () => duplicate(current), 'small')),
       el('details', {}, el('summary', {}, 'Payload 교체   다음 메시지부터 적용'), help('FILE_DATA 소스도 단일 Payload 반복으로 교체됩니다. walk 상태가 초기화됩니다.'), editor.node, tokenHelp(editor), replace), localErrors.node, lastError);
     let current = stream;
     primaryAction(node, apply); primaryAction(editor.node.parentElement, replace);
-    return { node, update(value) {
+    const draw = () => { if (!list.hidden) drawSparkline(spark, samples, current.rateTps); };
+    const observer = new ResizeObserver(draw); observer.observe(spark); scope.add(() => observer.disconnect());
+    return { node, draw, dispose: () => observer.disconnect(), update(value) {
       current = value; state.replaceChildren(badge(value.state));
       node.classList.toggle('selected', readState('selected-stream') === value.streamId);
       node.classList.toggle('alarm-row', value.state === 'FAILED'); node.classList.toggle('warn-row', value.state === 'RECONNECTING');
-      actual.textContent = `${Number(value.actualTps).toFixed(2)} TPS`; samples.add(Number(value.actualTps)); if (!list.hidden) drawSparkline(spark, samples);
-      stats.replaceChildren(metrics({ sent: value.sent, failed: value.failed, actualTps: Number(value.actualTps).toFixed(2), lagResets: value.lagResets, skipped: value.skippedWhileDisconnected }));
+      const tps = value.state === 'PAUSED' ? 0 : Number(value.actualTps);
+      actual.textContent = `${tps.toFixed(2)} TPS`; samples.add(tps);
+      stats.replaceChildren(metrics({ '보냄': value.sent, '실패': value.failed, '실제 TPS': tps.toFixed(2), '속도 재설정': value.lagResets, '건너뜀': value.skippedWhileDisconnected }));
       if (!dirty && document.activeElement !== rate.input && document.activeElement !== slider) { rate.value = value.rateTps; slider.value = value.rateTps; }
       pause.textContent = value.state === 'PAUSED' ? '재개' : '일시정지';
       for (const control of [rate.input, slider, apply, pause, stop, replace, ...speedButtons]) control.disabled = !active(value.state);
@@ -93,7 +97,7 @@ export default function streams(root, scope) {
     try {
       values = await scope.request('/dt/streams'); if (!scope.alive) return; pollErrors.clear();
       const ids = new Set(values.map(x => x.streamId));
-      for (const [id, card] of cards) if (!ids.has(id)) { card.node.remove(); cards.delete(id); }
+      for (const [id, card] of cards) if (!ids.has(id)) { card.dispose(); card.node.remove(); cards.delete(id); }
       list.querySelector('.empty')?.remove();
       if (!values.length) list.append(empty('실행한 스트림이 없습니다.', '새 스트림', () => form.node.querySelector('input').focus()));
       for (const value of values) { if (!cards.has(value.streamId)) { const card = createCard(value); cards.set(value.streamId, card); list.append(card.node); } cards.get(value.streamId).update(value); }

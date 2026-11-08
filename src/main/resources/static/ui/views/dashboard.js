@@ -1,6 +1,7 @@
 import { segment, request } from '../api.js';
 import { el, page, panel, badge, field, table, errorBox, actionButton, copyText, help, toast, primaryAction } from '../components/ui.js';
 import { plant } from '../components/plant.js';
+import { classifyAddresses } from '../components/state.js';
 
 export default function dashboard(root, scope) {
   page(root, 'UE 연결 점검');
@@ -45,8 +46,13 @@ export default function dashboard(root, scope) {
     if (!scope.alive) return;
     const b = plant.broker;
     broker.replaceChildren(b ? el('div', {}, badge(b.running ? 'RUNNING' : 'STOPPED'), el('p', {}, `기본 대상 ${b.defaultTarget === 'EMBEDDED' ? '내장' : '외부'} Artemis ${b.version}`), el('p', {}, b.websocketUrl), b.lastError ? el('div', { class: 'error' }, b.lastError) : null) : help('브로커 상태 확인 중'));
-    consumers.replaceChildren(b?.running ? table(['Address', '구독자', '대기 메시지'], (b.addresses || []).map(x => [x.name, x.consumerCount, x.messageCount])) : help('외부 브로커의 구독자 수는 조회 API에서 제공하지 않습니다.'));
-    consumers.append(help('구독자 수에 시뮬레이터 구독이 포함됩니다.'));
+    const addresses = classifyAddresses(b?.addresses);
+    if (b?.running) {
+      const topics = table(['Topic', '구독자', '대기 메시지'], addresses.topics.map(x => [x.name, x.consumerCount, x.messageCount]));
+      [...topics.querySelectorAll('tbody tr')].forEach((row, index) => row.classList.toggle('muted', !addresses.topics[index].consumerCount));
+      consumers.replaceChildren(addresses.topics.length ? topics : help('구독 중인 Topic이 없습니다.'));
+      consumers.append(el('p', { class: 'simulator-subscriptions' }, el('strong', {}, '시뮬레이터 구독'), '  ', addresses.simulator.map(x => `${x.name} (${x.consumerCount})`).join(', ') || '없음'), help('일반 Topic의 구독자 수에도 시뮬레이터 구독이 포함될 수 있습니다.'));
+    } else consumers.replaceChildren(help('외부 브로커의 구독자 수는 조회 API에서 제공하지 않습니다.'));
     const text = `WebSocketUrl=${b?.websocketUrl || '확인 중'}\nTestApiUrl=${location.origin}/mock`;
     settings.replaceChildren(el('div', { class: 'settings-block' }, text), actionButton('DTCoreSettings 복사', errors, () => copyText(text)), help('다른 PC에서는 호스트를 서버 PC의 IP로 입력하세요. WebSocketUrl은 내장 브로커 설정값입니다.'));
     const rows = [

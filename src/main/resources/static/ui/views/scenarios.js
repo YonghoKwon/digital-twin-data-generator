@@ -23,7 +23,7 @@ export default function scenarios(root, scope) {
   const runId = field('Run ID   선택', ''), startAt = field('시작 위치 startAtMs', 0, { type: 'number', min: 0 });
   const loop = check('반복 재생'), paused = check('일시정지 상태로 실행');
   const mode = select('실행 소스', [['FILE', '라이브러리 파일'], ['INLINE', '현재 JSON 편집기']], 'FILE');
-  const events = el('div', {}, empty('run에서 이벤트 보기를 선택하세요.'));
+  const events = el('div', { class: 'event-log', tabindex: 0, 'aria-label': '최근 이벤트 로그' }, empty('run에서 이벤트 보기를 선택하세요.'));
   let available = true, selectedRun = null;
   const definitions = new Map(), runLogs = new Map();
   const requireApi = async (path, options) => {
@@ -118,7 +118,7 @@ export default function scenarios(root, scope) {
       if (!seekDirty && document.activeElement !== seek) { seek.value = next.positionMs; progressText.textContent = `${(Math.min(1, Math.max(0, next.progress || 0)) * 100).toFixed(1)}%   ${next.positionMs} / ${next.durationMs}ms   반복 ${next.loopCount}`; }
       seek.max = Math.max(1, next.durationMs);
       if (!dirty && document.activeElement !== speedInput.input) speedInput.value = next.speed;
-      stats.replaceChildren(metrics({ sent: next.sent, failed: next.failed, skipped: next.skipped, events: next.loopCount > 0 ? `${next.eventsDone} (누적)` : `${next.eventsDone}/${next.eventsTotal}`, mockOps: next.mockOps }));
+      stats.replaceChildren(metrics({ '보냄': next.sent, '실패': next.failed, '건너뜀': next.skipped, '이벤트': next.loopCount > 0 ? `${next.eventsDone} (누적)` : `${next.eventsDone}/${next.eventsTotal}`, 'Mock 조작': next.mockOps }));
       byTopicContent.textContent = JSON.stringify(next.byTopic || {}, null, 2);
       mark.textContent = `마지막 MARK: ${next.lastMark || '없음'}`; mark.className = 'help';
       lastError.hidden = !next.lastError; lastError.textContent = next.lastError || '';
@@ -134,7 +134,15 @@ export default function scenarios(root, scope) {
       const values = await scope.request(`/dt/scenario-runs/${segment(id)}/events?limit=50`);
       if (!scope.alive || id !== selectedRun) return;
       runLogs.set(id, values);
-      events.replaceChildren(help(id), values.length ? table(['seq / atMs', '이벤트', '결과'], values.map(value => [`${value.seq} / ${value.atMs}`, `${value.type}   ${value.topic || value.messageId || ''}`, el('div', {}, value.result, value.error ? el('div', { class: 'error' }, value.error) : null)])) : empty('처리된 이벤트가 없습니다.'));
+      const newest = [...values].sort((a, b) => b.seq - a.seq);
+      const log = table(['seq / atMs', '이벤트', '결과'], newest.map(value => [`${value.seq} / ${value.atMs}`, `${value.type}   ${value.topic || value.messageId || ''}`, el('div', {}, value.result, value.error ? el('div', { class: 'error' }, value.error) : null)]));
+      [...log.querySelectorAll('tbody tr')].forEach((row, index) => {
+        row.classList.toggle('alarm-row', ['FAILED', 'MOCK_FAILED'].includes(newest[index].result));
+        row.classList.toggle('warn-row', newest[index].result === 'SKIPPED');
+      });
+      const scroll = events.scrollTop;
+      events.replaceChildren(help(id), newest.length ? log : empty('처리된 이벤트가 없습니다.'));
+      events.scrollTop = scroll;
     } catch (error) { pollErrors.show(error); }
   }
   async function refreshRuns() {
