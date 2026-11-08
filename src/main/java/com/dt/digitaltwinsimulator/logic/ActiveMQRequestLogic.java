@@ -1,6 +1,10 @@
 package com.dt.digitaltwinsimulator.logic;
 
-import com.dt.digitaltwinsimulator.config.ActiveMqBrokerProperties;
+import com.dt.digitaltwinsimulator.broker.BrokerConnectionService;
+import com.dt.digitaltwinsimulator.broker.BrokerSettings;
+import com.dt.digitaltwinsimulator.broker.MessagePublisher;
+import com.dt.digitaltwinsimulator.config.MessageProperties;
+import com.dt.digitaltwinsimulator.config.SimulatorFileProperties;
 import com.dt.digitaltwinsimulator.entity.dto.ActiveMQRequestDto;
 import com.dt.digitaltwinsimulator.entity.dto.ActiveMQRequestFileAndDataDto;
 import com.dt.digitaltwinsimulator.entity.dto.ActiveMQRequestFileDto;
@@ -8,14 +12,7 @@ import com.dt.digitaltwinsimulator.entity.dto.DryRunResponseDto;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
-import jakarta.jms.Connection;
-import jakarta.jms.ConnectionFactory;
-import jakarta.jms.JMSException;
-import jakarta.jms.MessageProducer;
-import jakarta.jms.Session;
-import jakarta.jms.TextMessage;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -23,7 +20,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -48,206 +44,173 @@ public class ActiveMQRequestLogic {
 
     private final TaskCancellationLogic taskCancellationLogic;
     private final TaskExecutionStatusLogic taskExecutionStatusLogic;
-    private final ActiveMqBrokerProperties brokerProperties;
+    private final BrokerConnectionService connections;
+    private final MessagePublisher publisher;
+    private final SimulatorFileProperties fileProperties;
+    private final MessageProperties messageProperties;
+    private final MessageBodyLogger messageLogger;
     private final JsonMapper objectMapper;
 
-    public ActiveMQRequestLogic(TaskCancellationLogic taskCancellationLogic, TaskExecutionStatusLogic taskExecutionStatusLogic, ActiveMqBrokerProperties brokerProperties, JsonMapper objectMapper) {
+    public ActiveMQRequestLogic(TaskCancellationLogic taskCancellationLogic, TaskExecutionStatusLogic taskExecutionStatusLogic,
+            BrokerConnectionService connections, MessagePublisher publisher, SimulatorFileProperties fileProperties,
+            MessageProperties messageProperties, MessageBodyLogger messageLogger, JsonMapper objectMapper) {
         this.taskCancellationLogic = taskCancellationLogic;
         this.taskExecutionStatusLogic = taskExecutionStatusLogic;
-        this.brokerProperties = brokerProperties;
+        this.connections = connections;
+        this.publisher = publisher;
+        this.fileProperties = fileProperties;
+        this.messageProperties = messageProperties;
+        this.messageLogger = messageLogger;
         this.objectMapper = objectMapper;
     }
 
+    public void preflight(ActiveMQRequestDto dto) {
+        dryRunTopic(dto, 1);
+        connections.verifyConnection(connections.resolve(dto.getActiveMQIp(), dto.getId(), dto.getPw(), dto.getTopic()));
+    }
+
+    public void preflight(ActiveMQRequestFileDto dto) throws IOException {
+        dryRunFileTopic(dto, 1);
+        connections.verifyConnection(connections.resolve(dto.getActiveMQIp(), dto.getId(), dto.getPw(), dto.getTopic()));
+    }
+
+    public void preflight(ActiveMQRequestFileAndDataDto dto) throws IOException {
+        dryRunFileAndDataTopic(dto, 1);
+        connections.verifyConnection(connections.resolve(dto.getActiveMQIp(), dto.getId(), dto.getPw(), dto.getTopic()));
+    }
+
     @Async("threadPoolTaskExecutor")
-    public CompletableFuture<String> sendTopic(String taskId, ActiveMQRequestDto requestDto) {
-        registerTask(taskId);
-        BrokerSettings broker = brokerFrom(requestDto.getActiveMQIp(), requestDto.getId(), requestDto.getPw(), requestDto.getTopic());
-        try (Connection connection = createConnection(broker)) {
-            connection.start();
-            try (Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-                 MessageProducer sender = session.createProducer(session.createTopic(broker.topic()))) {
-                FormatDefinition formatDefinition = FormatDefinition.from(requestDto.getFormat());
-                List<String> valueRows = sortedValueRows(requestDto.getValue());
-                int messageCount = resolveMessageCount(requestDto.isRepeatBoolean(), requestDto.getRepeatTime(), requestDto.getDelayTime(), requestDto.getMessageCount());
-                if (valueRows.isEmpty()) {
-                    sendRandomMessages(taskId, requestDto, session, sender, formatDefinition, messageCount);
-                } else {
-                    sendValueMessages(taskId, requestDto, session, sender, formatDefinition, valueRows, messageCount);
+    public CompletableFuture<String> sendTopic(String taskId, ActiveMQRequestDto dto) {
+        BrokerSettings broker = connections.resolve(dto.getActiveMQIp(), dto.getId(), dto.getPw(), dto.getTopic());
+        return runTask(taskId, broker, publication -> {
+            FormatDefinition definition = FormatDefinition.from(dto.getFormat());
+            List<String> rows = sortedValueRows(dto.getValue());
+            int repeats = resolveMessageCount(dto.isRepeatBoolean(), dto.getRepeatTime(), dto.getDelayTime(), dto.getMessageCount());
+            TpsPacer pacer = new TpsPacer(dto.getTargetTps());
+            int sentIndex = 0;
+            for (int repeat = 0; repeat < repeats; repeat++) {
+                for (int row = 0; row < Math.max(1, rows.size()); row++) {
+                    if (isCancelled(taskId)) return;
+                    pacer.awaitTurn(sentIndex++);
+                    Map<String, Object> payload = rows.isEmpty() ? definition.randomPayload(dto.isTypedValues())
+                            : definition.payloadFromValueRow(rows.get(row), dto.isTypedValues());
+                    publish(taskId, publication, broker, createStructuredMessage(dto.getTcName(), payload), sentIndex);
+                    sleep(dto.getDelayTime());
                 }
             }
-            taskExecutionStatusLogic.markSuccess(taskId);
-        } catch (JMSException | JacksonException e) {
-            taskExecutionStatusLogic.markFailed(taskId, e);
-            throw new RuntimeException(e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            taskExecutionStatusLogic.markCancelled(taskId);
-            throw new RuntimeException(e);
-        } finally {
-            taskCancellationLogic.removeTask(taskId);
-        }
-        return CompletableFuture.completedFuture("success");
+        });
     }
 
-    public DryRunResponseDto dryRunTopic(ActiveMQRequestDto requestDto, int limit) throws JacksonException {
-        FormatDefinition formatDefinition = FormatDefinition.from(requestDto.getFormat());
-        List<String> valueRows = sortedValueRows(requestDto.getValue());
+    public DryRunResponseDto dryRunTopic(ActiveMQRequestDto dto, int limit) {
+        FormatDefinition definition = FormatDefinition.from(dto.getFormat());
+        List<String> rows = sortedValueRows(dto.getValue());
+        int repeats = resolveMessageCount(dto.isRepeatBoolean(), dto.getRepeatTime(), dto.getDelayTime(), dto.getMessageCount());
         int max = sanitizeLimit(limit);
-        int repeatCount = resolveMessageCount(requestDto.isRepeatBoolean(), requestDto.getRepeatTime(), requestDto.getDelayTime(), requestDto.getMessageCount());
-        int sourceRowCount = valueRows.isEmpty() ? 1 : valueRows.size();
         List<JsonNode> messages = new ArrayList<>();
-
-        if (valueRows.isEmpty()) {
-            for (int i = 0; i < repeatCount && messages.size() < max; i++) {
-                messages.add(toJsonNode(createStructuredMessage(requestDto.getTcName(), formatDefinition.randomPayload())));
-            }
-            return createDryRunResponse(limit, repeatCount, sourceRowCount, (long) repeatCount, "RANDOM_FORMAT", messages);
-        }
-
-        for (int repeatIndex = 0; repeatIndex < repeatCount && messages.size() < max; repeatIndex++) {
-            for (String valueRow : valueRows) {
-                if (messages.size() >= max) break;
-                messages.add(toJsonNode(createStructuredMessage(requestDto.getTcName(), formatDefinition.payloadFromValueRow(valueRow))));
+        for (int repeat = 0; repeat < repeats && messages.size() < max; repeat++) {
+            for (int row = 0; row < Math.max(1, rows.size()) && messages.size() < max; row++) {
+                var payload = rows.isEmpty() ? definition.randomPayload(dto.isTypedValues())
+                        : definition.payloadFromValueRow(rows.get(row), dto.isTypedValues());
+                messages.add(toJsonNode(createStructuredMessage(dto.getTcName(), payload)));
             }
         }
-        return createDryRunResponse(limit, repeatCount, sourceRowCount, (long) repeatCount * sourceRowCount, "VALUE_ROWS", messages);
+        int sourceRows = Math.max(1, rows.size());
+        return createDryRunResponse(limit, repeats, sourceRows, (long) repeats * sourceRows,
+                rows.isEmpty() ? "RANDOM_FORMAT" : "VALUE_ROWS", messages);
     }
 
-    private void sendRandomMessages(String taskId, ActiveMQRequestDto requestDto, Session session, MessageProducer sender, FormatDefinition formatDefinition, int messageCount) throws JMSException, InterruptedException, JacksonException {
-        TpsPacer pacer = new TpsPacer(requestDto.getTargetTps());
-        for (int i = 0; i < messageCount; i++) {
-            if (isCancelled(taskId)) return;
-            pacer.awaitTurn(i);
-            TextMessage message = session.createTextMessage(createStructuredMessage(requestDto.getTcName(), formatDefinition.randomPayload()));
-            log.info("{} random message[{}] : {}", taskId, i, SensitiveLogMasker.mask(message.getText()));
-            sender.send(message);
-            taskExecutionStatusLogic.incrementSentCount(taskId);
-            sleep(requestDto.getDelayTime());
-        }
-    }
-
-    private void sendValueMessages(String taskId, ActiveMQRequestDto requestDto, Session session, MessageProducer sender, FormatDefinition formatDefinition, List<String> valueRows, int repeatCount) throws JMSException, InterruptedException, JacksonException {
-        TpsPacer pacer = new TpsPacer(requestDto.getTargetTps());
-        int sentIndex = 0;
-        for (int repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
-            for (int rowIndex = 0; rowIndex < valueRows.size(); rowIndex++) {
+    @Async("threadPoolTaskExecutor")
+    public CompletableFuture<String> sendFileTopic(String taskId, ActiveMQRequestFileDto dto) {
+        BrokerSettings broker = connections.resolve(dto.getActiveMQIp(), dto.getId(), dto.getPw(), dto.getTopic());
+        return runTask(taskId, broker, publication -> {
+            String content = Files.readString(resolveFile(dto.getFilePath(), dto.getFileName()), StandardCharsets.UTF_8).trim();
+            int repeats = resolveMessageCount(dto.isRepeatBoolean(), dto.getRepeatTime(), dto.getDelayTime(), dto.getMessageCount());
+            TpsPacer pacer = new TpsPacer(dto.getTargetTps());
+            for (int i = 0; i < repeats; i++) {
                 if (isCancelled(taskId)) return;
-                pacer.awaitTurn(sentIndex++);
-                Map<String, String> payload = formatDefinition.payloadFromValueRow(valueRows.get(rowIndex));
-                TextMessage message = session.createTextMessage(createStructuredMessage(requestDto.getTcName(), payload));
-                log.info("{} value message[repeat={}, row={}] : {}", taskId, repeatIndex, rowIndex, SensitiveLogMasker.mask(message.getText()));
-                sender.send(message);
-                taskExecutionStatusLogic.incrementSentCount(taskId);
-                sleep(requestDto.getDelayTime());
+                pacer.awaitTurn(i);
+                publish(taskId, publication, broker, createFileMessage(dto.getTcName(), taskId, content), i + 1L);
+                sleep(dto.getDelayTime());
             }
+        });
+    }
+
+    public DryRunResponseDto dryRunFileTopic(ActiveMQRequestFileDto dto, int limit) throws IOException {
+        String content = Files.readString(resolveFile(dto.getFilePath(), dto.getFileName()), StandardCharsets.UTF_8).trim();
+        int repeats = resolveMessageCount(dto.isRepeatBoolean(), dto.getRepeatTime(), dto.getDelayTime(), dto.getMessageCount());
+        List<JsonNode> messages = new ArrayList<>();
+        for (int i = 0; i < repeats && messages.size() < sanitizeLimit(limit); i++) {
+            messages.add(toJsonNode(createFileMessage(dto.getTcName(), "dry-run", content)));
         }
+        return createDryRunResponse(limit, repeats, 1, repeats, "FILE_REPEAT", messages);
     }
 
     @Async("threadPoolTaskExecutor")
-    public CompletableFuture<String> sendFileTopic(String taskId, ActiveMQRequestFileDto requestDto) {
-        registerTask(taskId);
-        BrokerSettings broker = brokerFrom(requestDto.getActiveMQIp(), requestDto.getId(), requestDto.getPw(), requestDto.getTopic());
-        try (Connection connection = createConnection(broker)) {
-            connection.start();
-            try (Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-                 MessageProducer sender = session.createProducer(session.createTopic(broker.topic()))) {
-                Path filePath = resolveFile(requestDto.getFilePath(), requestDto.getFileName());
-                String fileContents = Files.readString(filePath, StandardCharsets.UTF_8).trim();
-                int messageCount = resolveMessageCount(requestDto.isRepeatBoolean(), requestDto.getRepeatTime(), requestDto.getDelayTime(), requestDto.getMessageCount());
-                TpsPacer pacer = new TpsPacer(requestDto.getTargetTps());
-                for (int i = 0; i < messageCount; i++) {
-                    if (isCancelled(taskId)) return CompletableFuture.completedFuture("Cancelled");
-                    pacer.awaitTurn(i);
-                    TextMessage message = session.createTextMessage(createFileMessage(requestDto.getTcName(), taskId, fileContents));
-                    log.info("{} file message[{}] : {}", taskId, i, SensitiveLogMasker.mask(message.getText()));
-                    sender.send(message);
-                    taskExecutionStatusLogic.incrementSentCount(taskId);
-                    sleep(requestDto.getDelayTime());
+    public CompletableFuture<String> sendFileAndDataTopic(String taskId, ActiveMQRequestFileAndDataDto dto) {
+        BrokerSettings broker = connections.resolve(dto.getActiveMQIp(), dto.getId(), dto.getPw(), dto.getTopic());
+        return runTask(taskId, broker, publication -> {
+            String template = Files.readString(resolveFile(dto.getFilePath(), dto.getFormatFileName()), StandardCharsets.UTF_8);
+            List<String[]> rows = readDataLines(resolveFile(dto.getFilePath(), dto.getDataFileName()), template);
+            int repeats = resolveMessageCount(dto.isRepeatBoolean(), dto.getRepeatTime(), dto.getDelayTime(), dto.getMessageCount());
+            TpsPacer pacer = new TpsPacer(dto.getTargetTps());
+            int sentIndex = 0;
+            for (int repeat = 0; repeat < repeats; repeat++) {
+                for (String[] row : rows) {
+                    if (isCancelled(taskId)) return;
+                    pacer.awaitTurn(sentIndex++);
+                    publish(taskId, publication, broker, createFileDataMessage(dto.getTcName(), renderTemplate(template, row)), sentIndex);
+                    sleep(dto.getDelayTime());
                 }
             }
-            taskExecutionStatusLogic.markSuccess(taskId);
-        } catch (JMSException | IOException | JacksonException e) {
-            taskExecutionStatusLogic.markFailed(taskId, e);
-            throw new RuntimeException(e);
+        });
+    }
+
+    public DryRunResponseDto dryRunFileAndDataTopic(ActiveMQRequestFileAndDataDto dto, int limit) throws IOException {
+        String template = Files.readString(resolveFile(dto.getFilePath(), dto.getFormatFileName()), StandardCharsets.UTF_8);
+        List<String[]> rows = readDataLines(resolveFile(dto.getFilePath(), dto.getDataFileName()), template);
+        int repeats = resolveMessageCount(dto.isRepeatBoolean(), dto.getRepeatTime(), dto.getDelayTime(), dto.getMessageCount());
+        List<JsonNode> messages = new ArrayList<>();
+        for (int repeat = 0; repeat < repeats && messages.size() < sanitizeLimit(limit); repeat++) {
+            for (String[] row : rows) {
+                if (messages.size() >= sanitizeLimit(limit)) break;
+                messages.add(toJsonNode(createFileDataMessage(dto.getTcName(), renderTemplate(template, row))));
+            }
+        }
+        return createDryRunResponse(limit, repeats, rows.size(), (long) repeats * rows.size(), "FILE_DATA", messages);
+    }
+
+    private void publish(String taskId, MessagePublisher.Publication publication, BrokerSettings broker, String body, long sequence) {
+        toJsonNode(body);
+        publication.publish(broker.topic(), body, Map.of());
+        taskExecutionStatusLogic.incrementSentCount(taskId);
+        messageLogger.logMessage(taskId, sequence, body);
+    }
+
+    private CompletableFuture<String> runTask(String taskId, BrokerSettings broker, TaskWork work) {
+        registerTask(taskId);
+        try {
+            try (var publication = publisher.open(broker)) {
+                work.run(publication);
+            }
+            boolean cancelled = taskCancellationLogic.isCancellationRequested(taskId);
+            if (cancelled) taskExecutionStatusLogic.markCancelled(taskId);
+            else taskExecutionStatusLogic.markSuccess(taskId);
+            return CompletableFuture.completedFuture(cancelled ? "Cancelled" : "success");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             taskExecutionStatusLogic.markCancelled(taskId);
             throw new RuntimeException(e);
-        } finally {
-            taskCancellationLogic.removeTask(taskId);
-        }
-        return CompletableFuture.completedFuture("success");
-    }
-
-    public DryRunResponseDto dryRunFileTopic(ActiveMQRequestFileDto requestDto, int limit) throws IOException {
-        Path filePath = resolveFile(requestDto.getFilePath(), requestDto.getFileName());
-        String fileContents = Files.readString(filePath, StandardCharsets.UTF_8).trim();
-        int max = sanitizeLimit(limit);
-        int messageCount = resolveMessageCount(requestDto.isRepeatBoolean(), requestDto.getRepeatTime(), requestDto.getDelayTime(), requestDto.getMessageCount());
-        List<JsonNode> messages = new ArrayList<>();
-        for (int i = 0; i < messageCount && messages.size() < max; i++) {
-            messages.add(toJsonNode(createFileMessage(requestDto.getTcName(), "dry-run", fileContents)));
-        }
-        return createDryRunResponse(limit, messageCount, 1, messageCount, "FILE_REPEAT", messages);
-    }
-
-    @Async("threadPoolTaskExecutor")
-    public CompletableFuture<String> sendFileAndDataTopic(String taskId, ActiveMQRequestFileAndDataDto requestDto) {
-        registerTask(taskId);
-        BrokerSettings broker = brokerFrom(requestDto.getActiveMQIp(), requestDto.getId(), requestDto.getPw(), requestDto.getTopic());
-        try (Connection connection = createConnection(broker)) {
-            connection.start();
-            try (Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-                 MessageProducer sender = session.createProducer(session.createTopic(broker.topic()))) {
-                Path formatFilePath = resolveFile(requestDto.getFilePath(), requestDto.getFormatFileName());
-                Path dataFilePath = resolveFile(requestDto.getFilePath(), requestDto.getDataFileName());
-                String originFormatContent = Files.readString(formatFilePath, StandardCharsets.UTF_8);
-                List<String[]> dataLines = readDataLines(dataFilePath, originFormatContent);
-                int repeatCount = resolveMessageCount(requestDto.isRepeatBoolean(), requestDto.getRepeatTime(), requestDto.getDelayTime(), requestDto.getMessageCount());
-                TpsPacer pacer = new TpsPacer(requestDto.getTargetTps());
-                int sentIndex = 0;
-                for (int repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
-                    for (int rowIndex = 0; rowIndex < dataLines.size(); rowIndex++) {
-                        if (isCancelled(taskId)) return CompletableFuture.completedFuture("Cancelled");
-                        pacer.awaitTurn(sentIndex++);
-                        String renderedFormat = renderTemplate(originFormatContent, dataLines.get(rowIndex));
-                        TextMessage message = session.createTextMessage(createFileDataMessage(requestDto.getTcName(), renderedFormat));
-                        log.info("{} file-data message[repeat={}, row={}] : {}", taskId, repeatIndex, rowIndex, SensitiveLogMasker.mask(message.getText()));
-                        sender.send(message);
-                        taskExecutionStatusLogic.incrementSentCount(taskId);
-                        sleep(requestDto.getDelayTime());
-                    }
-                }
-            }
-            taskExecutionStatusLogic.markSuccess(taskId);
-        } catch (JMSException | IOException | JacksonException e) {
+        } catch (Exception e) {
             taskExecutionStatusLogic.markFailed(taskId, e);
             throw new RuntimeException(e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            taskExecutionStatusLogic.markCancelled(taskId);
-            throw new RuntimeException(e);
         } finally {
             taskCancellationLogic.removeTask(taskId);
         }
-        return CompletableFuture.completedFuture("success");
     }
 
-    public DryRunResponseDto dryRunFileAndDataTopic(ActiveMQRequestFileAndDataDto requestDto, int limit) throws IOException {
-        Path formatFilePath = resolveFile(requestDto.getFilePath(), requestDto.getFormatFileName());
-        Path dataFilePath = resolveFile(requestDto.getFilePath(), requestDto.getDataFileName());
-        String originFormatContent = Files.readString(formatFilePath, StandardCharsets.UTF_8);
-        List<String[]> dataLines = readDataLines(dataFilePath, originFormatContent);
-        int repeatCount = resolveMessageCount(requestDto.isRepeatBoolean(), requestDto.getRepeatTime(), requestDto.getDelayTime(), requestDto.getMessageCount());
-        int max = sanitizeLimit(limit);
-        List<JsonNode> messages = new ArrayList<>();
-        for (int repeatIndex = 0; repeatIndex < repeatCount && messages.size() < max; repeatIndex++) {
-            for (String[] dataLine : dataLines) {
-                if (messages.size() >= max) break;
-                messages.add(toJsonNode(createFileDataMessage(requestDto.getTcName(), renderTemplate(originFormatContent, dataLine))));
-            }
-        }
-        return createDryRunResponse(limit, repeatCount, dataLines.size(), (long) repeatCount * dataLines.size(), "FILE_DATA", messages);
+    @FunctionalInterface
+    private interface TaskWork {
+        void run(MessagePublisher.Publication publication) throws Exception;
     }
 
     private DryRunResponseDto createDryRunResponse(int requestedLimit, int repeatCount, int sourceRowCount, long estimatedTotalMessagesPerTask, String generationMode, List<JsonNode> messages) {
@@ -256,41 +219,28 @@ public class ActiveMQRequestLogic {
 
     private JsonNode toJsonNode(String json) {
         try {
-            return objectMapper.readTree(json);
+            JsonNode node = objectMapper.reader().with(tools.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(json);
+            if (node == null || !node.isObject()) throw new IllegalArgumentException("Generated message must be a JSON object.");
+            return node;
         } catch (JacksonException e) {
             throw new IllegalArgumentException("Generated message is not valid JSON.", e);
         }
     }
 
     private void registerTask(String taskId) {
-        log.info("taskId : {}", taskId);
         taskCancellationLogic.registerTask(taskId);
         taskExecutionStatusLogic.markRunning(taskId);
     }
 
-    private Connection createConnection(BrokerSettings broker) throws JMSException {
-        ConnectionFactory connectionFactory = new ActiveMQConnectionFactory(broker.brokerUrl());
-        return connectionFactory.createConnection(broker.username(), broker.password());
-    }
-
-    private BrokerSettings brokerFrom(String brokerUrl, String username, String password, String topic) {
-        return new BrokerSettings(defaultIfBlank(brokerUrl, brokerProperties.getBrokerUrl()), defaultIfBlank(username, brokerProperties.getUsername()), defaultIfBlank(password, brokerProperties.getPassword()), defaultIfBlank(topic, brokerProperties.getTopic()));
-    }
-
-    private String defaultIfBlank(String value, String defaultValue) {
-        return value == null || value.isBlank() ? defaultValue : value;
-    }
-
     private boolean isCancelled(String taskId) {
         if (taskCancellationLogic.isCancellationRequested(taskId)) {
-            taskExecutionStatusLogic.markCancelled(taskId);
             log.info("작업이 취소되었습니다: {}", taskId);
             return true;
         }
         return false;
     }
 
-    private String createStructuredMessage(String tcName, Map<String, String> payload) throws JacksonException {
+    private String createStructuredMessage(String tcName, Map<String, ?> payload) throws JacksonException {
         String nowString = nowTimestamp();
         Map<String, Object> dataMap = new LinkedHashMap<>();
         dataMap.put(nowString, payload);
@@ -325,18 +275,11 @@ public class ActiveMQRequestLogic {
         sb.append("\"MESSAGE_ID\":\"").append(escapeJsonString(tcName)).append("\",");
         sb.append("\"DATA_MAP\":{");
         sb.append('\"').append(escapeJsonString(nowString)).append("\":{");
-        sb.append("\"transaction_code\":\"").append(escapeJsonString(tcName)).append("\",");
-        sb.append("\"works_code\":\"K\",");
-        sb.append("\"sndr_inform_edit_pgm_id\":\"\",");
-        sb.append("\"eai_interface_id\":\"\",");
-        sb.append("\"interface_data_dir_actual_type\":\"\",");
-        sb.append("\"interface_data_ocr_res_flag\":\"\",");
-        sb.append("\"interface_data_send_seq\":\"0\",");
-        sb.append("\"interface_data_upd_tp\":\"\",");
-        sb.append("\"interface_data_t_len\":\"760\",");
-        sb.append("\"attribute\":\" \",");
-        sb.append("\"bsc_gw_data_attr\":\" \",");
-        sb.append("\"it_com_eai_ifc_var_item_usg_f\":\" \"");
+        sb.append("\"transaction_code\":\"").append(escapeJsonString(tcName)).append('"');
+        for (var field : messageProperties.getFileDataExtraFields().entrySet()) {
+            sb.append(',').append('"').append(escapeJsonString(field.getKey())).append("\":\"")
+                    .append(escapeJsonString(field.getValue())).append('"');
+        }
         if (!normalizedFormatContent.isBlank()) sb.append(',').append(normalizedFormatContent);
         sb.append("}}}");
         return sb.toString();
@@ -348,7 +291,9 @@ public class ActiveMQRequestLogic {
         int dataIndex = 0;
         while (matcher.find()) {
             if (dataIndex >= data.length) throw new IllegalArgumentException("데이터 컬럼 수가 포맷 파일의 placeholder 수보다 적습니다.");
-            matcher.appendReplacement(result, Matcher.quoteReplacement(data[dataIndex++]));
+            String value = data[dataIndex++];
+            if (insideJsonString(template, matcher.start())) value = escapeJsonString(value);
+            matcher.appendReplacement(result, Matcher.quoteReplacement(value));
         }
         matcher.appendTail(result);
         return result.toString();
@@ -459,11 +404,35 @@ public class ActiveMQRequestLogic {
     }
 
     private Path resolveFile(String directory, String filename) {
-        Path basePath = Paths.get(directory).toAbsolutePath().normalize();
-        Path targetPath = basePath.resolve(filename).normalize();
-        if (!targetPath.startsWith(basePath)) throw new IllegalArgumentException("허용되지 않은 파일 경로입니다: " + filename);
-        if (!Files.isRegularFile(targetPath)) throw new IllegalArgumentException("파일을 찾을 수 없습니다: " + targetPath);
-        return targetPath;
+        try {
+            if (directory == null || filename == null) throw new IllegalArgumentException("File path and name are required.");
+            Path base = Path.of(fileProperties.getBaseDir()).toAbsolutePath().normalize();
+            Path requestedDirectory = base.resolve(directory).normalize();
+            Path target = requestedDirectory.resolve(filename).normalize();
+            if (!requestedDirectory.startsWith(base) || !target.startsWith(requestedDirectory)) {
+                throw new IllegalArgumentException("File path is outside the allowed base directory.");
+            }
+            Path realBase = base.toRealPath();
+            Path realTarget = target.toRealPath();
+            if (!realTarget.startsWith(realBase) || !Files.isRegularFile(realTarget)) {
+                throw new IllegalArgumentException("File path is outside the allowed base directory or is not a regular file.");
+            }
+            return realTarget;
+        } catch (IOException e) {
+            throw new IllegalArgumentException("File is missing or unreadable.", e);
+        }
+    }
+
+    private boolean insideJsonString(String template, int position) {
+        boolean quoted = false;
+        boolean escaped = false;
+        for (int i = 0; i < position; i++) {
+            char c = template.charAt(i);
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = !quoted;
+        }
+        return quoted;
     }
 
     private String nowTimestamp() {
@@ -481,16 +450,13 @@ public class ActiveMQRequestLogic {
     }
 
     private String escapeJsonString(String value) {
-        if (value == null) return "";
-        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+        String quoted = objectMapper.writeValueAsString(value == null ? "" : value);
+        return quoted.substring(1, quoted.length() - 1);
     }
 
     public String prettyPrintUsingGlobalSetting(String uglyJsonString) throws JacksonException {
         Object jsonObject = objectMapper.readValue(uglyJsonString, Object.class);
         return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(jsonObject);
-    }
-
-    private record BrokerSettings(String brokerUrl, String username, String password, String topic) {
     }
 
     private static class TpsPacer {
@@ -522,24 +488,47 @@ public class ActiveMQRequestLogic {
             return new FormatDefinition(dataIds, dataTypes, randomBooleans, randomConditions);
         }
 
-        private Map<String, String> randomPayload() {
-            Map<String, String> payload = new LinkedHashMap<>();
-            for (int i = 0; i < dataIds.size(); i++) payload.put(dataIds.get(i), RandomValueGenerator.generate(dataTypes.get(i), randomConditions.get(i)));
+        private Map<String, Object> randomPayload(boolean typedValues) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            for (int i = 0; i < dataIds.size(); i++) payload.put(dataIds.get(i), typedValue(RandomValueGenerator.generate(dataTypes.get(i), randomConditions.get(i)), dataTypes.get(i), typedValues));
             return payload;
         }
 
-        private Map<String, String> payloadFromValueRow(String row) {
+        private Map<String, Object> payloadFromValueRow(String row, boolean typedValues) {
             String[] values = row.split(",", -1);
-            Map<String, String> payload = new LinkedHashMap<>();
+            Map<String, Object> payload = new LinkedHashMap<>();
             for (int i = 0; i < dataIds.size(); i++) {
                 if (RandomValueGenerator.isRandomEnabled(randomBooleans.get(i))) {
-                    payload.put(dataIds.get(i), RandomValueGenerator.generate(dataTypes.get(i), randomConditions.get(i)));
+                    payload.put(dataIds.get(i), typedValue(RandomValueGenerator.generate(dataTypes.get(i), randomConditions.get(i)), dataTypes.get(i), typedValues));
                     continue;
                 }
                 if (i >= values.length) throw new IllegalArgumentException("value 컬럼 수가 format dataId 수보다 적습니다. row=" + row);
-                payload.put(dataIds.get(i), values[i].trim());
+                payload.put(dataIds.get(i), typedValue(values[i].trim(), dataTypes.get(i), typedValues));
             }
             return payload;
+        }
+
+        private static Object typedValue(String value, String type, boolean enabled) {
+            if (!enabled) return value;
+            try {
+                return switch (type.trim().toLowerCase(java.util.Locale.ROOT)) {
+                    case "integer", "int", "long" -> Long.valueOf(value);
+                    case "double", "float", "number" -> {
+                        double number = Double.parseDouble(value);
+                        if (!Double.isFinite(number)) throw new IllegalArgumentException("Non-finite number.");
+                        yield number;
+                    }
+                    case "boolean", "bool" -> {
+                        if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) {
+                            throw new IllegalArgumentException("Boolean value must be true or false.");
+                        }
+                        yield Boolean.valueOf(value);
+                    }
+                    default -> value;
+                };
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Value does not match the declared numeric type.", e);
+            }
         }
 
         private static List<String> splitRequired(String value, String fieldName) {

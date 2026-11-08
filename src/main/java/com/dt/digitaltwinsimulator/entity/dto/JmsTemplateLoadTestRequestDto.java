@@ -11,6 +11,9 @@ import lombok.ToString;
 @Setter
 @ToString
 public class JmsTemplateLoadTestRequestDto {
+    private String activeMQIp;
+    private String id;
+    private String pw;
     @NotBlank
     private String tcName;
 

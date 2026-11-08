@@ -20,6 +20,22 @@
 ### - TPS 테스트 시 delayTime=0을 권장합니다. delayTime과 targetTps를 같이 주면 둘 다 적용됩니다.
 ### - 총 메시지 수 = concurrentTasks × repeatCount × data row 수
 ### - repeatCount = messageCount > 0 이면 messageCount, 아니면 ceil(repeatTime / delayTime)
+### - 파일은 simulator.files.base-dir 하위만 허용합니다. 기본 ./data, local profile c:/Project.
+###   filePath="."는 base-dir, 외부 경로/다른 드라이브/외부 symlink는 400입니다.
+### - 비동기 전송은 요청 스레드에서 dry-run 1건 + broker connect/start/close를 먼저 확인합니다.
+###   simulator.activemq.connect-timeout-ms=3000 (callTimeout/callFailoverTimeout/connect-timeout-millis, 재시도 0)
+### - 오류 JSON: {"error":"INVALID_REQUEST","message":"<검증 실패 원인>"}
+###   400 INVALID_REQUEST / 502 BROKER_CONNECTION_FAILED / 409 DUPLICATE_TASK_ID (실행 중인 load taskId)
+### - 성공 문자열, dry-run messages object, LoadTestResultDto 구조는 유지합니다.
+### - 일반 format/value의 typedValues=false(기본)는 문자열, true는 Integer/Double/Boolean을 number/boolean으로 출력합니다.
+### - placeholder 문자열 내부는 JSON escape, 외부는 원문 삽입 후 JSON 검증합니다. 이후 행 생성 실패는 task FAILED입니다.
+### - 메시지 본문 DEBUG, simulator.message-log.sample-every=0(INFO 샘플 끔), N이면 성공 N건마다 INFO 샘플.
+###   본문은 SensitiveLogMasker.mask 적용, task 시작/종료 INFO 요약.
+### - EAI 기본값/순서는 기존 그대로 유지하며 LinkedHashMap 설정으로 override합니다.
+###   simulator.message.file-data-extra-fields[works_code]=K
+###   simulator.message.file-data-extra-fields[interface_data_t_len]=760
+### - JPA/H2/Postgres, /h2-console, 개발용 /test는 제외했습니다. 설정은 application.properties에 통합했습니다.
+### - .\mvnw.cmd -B test: 외부 broker 불필요, 서버 RANDOM_PORT, symlink 권한 부족 시 해당 테스트만 skip.
 ### ============================================================================
 
 @host = http://localhost:8080
@@ -28,7 +44,7 @@
 @brokerPw = artemis
 @topic = topic.cep.output.0
 @tcName = KP1D0012
-@filePath = c:/Project/
+@filePath = .
 @formatFileName = KE2D1Z11_format2.txt
 @dataFileName = KE2D1Z11.txt
 @targetTps = 100
@@ -424,6 +440,9 @@ POST {{host}}/activemq/request/jms-template-load/jms-load-small
 Content-Type: application/json
 
 {
+  "activeMQIp": "{{brokerUrl}}",
+  "id": "{{brokerId}}",
+  "pw": "{{brokerPw}}",
   "tcName": "{{tcName}}",
   "messageCount": 1000,
   "delayTime": 0,
@@ -462,11 +481,35 @@ POST {{host}}/activemq/task/cancel-tasks
 ###
 POST {{host}}/activemq/task/cancel-task/여기에-taskId-붙여넣기
 
+### typedValues opt-in dry-run: i=12, d=2.5, enabled=true (숫자/boolean)
+POST {{host}}/activemq/request/dry-run?limit=1
+Content-Type: application/json
 
-### ============================================================================
-### 8. 개발용 테스트 API
-### ============================================================================
-### /test API는 spring profile이 local 또는 dev일 때만 활성화됩니다.
-### 예: mvn spring-boot:run -Dspring-boot.run.profiles=local
+{
+  "tcName": "typed-example",
+  "typedValues": true,
+  "messageCount": 1,
+  "format": [{"dataId":"i,d,enabled","dataType":"Integer,Double,Boolean","randomBoolean":"0,0,0"}],
+  "value": [{"0":"12,2.5,true"}]
+}
 
-GET {{host}}/test
+### 사전 연결 실패 확인 -> 502 JSON, task 시작 안 함
+POST {{host}}/activemq/request/t1
+Content-Type: application/json
+
+{
+  "activeMQIp": "tcp://127.0.0.1:1",
+  "tcName": "broker-unavailable",
+  "messageCount": 1,
+  "format": [{"dataId":"status","dataType":"String","randomCondition":"2"}]
+}
+
+### 외부 경로 확인 -> 400 JSON, broker 연결 안 함
+POST {{host}}/activemq/request/file/outside-base
+Content-Type: application/json
+
+{
+  "tcName": "outside-base",
+  "filePath": "..",
+  "fileName": "outside.json"
+}

@@ -1,12 +1,11 @@
 package com.dt.digitaltwinsimulator.logic;
 
-import com.dt.digitaltwinsimulator.config.ActiveMqBrokerProperties;
 import com.dt.digitaltwinsimulator.entity.dto.JmsTemplateLoadTestRequestDto;
 import com.dt.digitaltwinsimulator.entity.dto.LoadTestResultDto;
-import jakarta.jms.ConnectionFactory;
-import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
-import org.springframework.jms.connection.CachingConnectionFactory;
-import org.springframework.jms.core.JmsTemplate;
+import com.dt.digitaltwinsimulator.broker.BrokerConnectionService;
+import com.dt.digitaltwinsimulator.broker.MessagePublisher;
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -20,39 +19,39 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+@Slf4j
 @Service
 public class JmsTemplateLoadTestLogic {
     private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
 
-    private final ActiveMqBrokerProperties brokerProperties;
+    private final BrokerConnectionService connections;
+    private final MessagePublisher publisher;
+    private final MessageBodyLogger messageLogger;
     private final TaskCancellationLogic taskCancellationLogic;
 
-    public JmsTemplateLoadTestLogic(ActiveMqBrokerProperties brokerProperties, TaskCancellationLogic taskCancellationLogic) {
-        this.brokerProperties = brokerProperties;
+    public JmsTemplateLoadTestLogic(BrokerConnectionService connections, MessagePublisher publisher,
+            MessageBodyLogger messageLogger, TaskCancellationLogic taskCancellationLogic) {
+        this.connections = connections;
+        this.publisher = publisher;
+        this.messageLogger = messageLogger;
         this.taskCancellationLogic = taskCancellationLogic;
     }
 
     public LoadTestResultDto run(String taskId, JmsTemplateLoadTestRequestDto requestDto) {
         taskCancellationLogic.registerTask(taskId);
-        CachingConnectionFactory cachingConnectionFactory = null;
+        MessagePublisher.Publication publication = null;
         ExecutorService executorService = null;
         long startedAt = System.nanoTime();
         AtomicLong successCount = new AtomicLong();
         AtomicLong failureCount = new AtomicLong();
 
+        String outcome = "FAILED";
+        log.info("taskId={} sentCount=0 elapsedMillis=0 result=RUNNING", taskId);
         try {
-            ConnectionFactory targetFactory = new ActiveMQConnectionFactory(
-                    brokerProperties.getBrokerUrl(),
-                    brokerProperties.getUsername(),
-                    brokerProperties.getPassword()
-            );
-            cachingConnectionFactory = new CachingConnectionFactory(targetFactory);
-            cachingConnectionFactory.setSessionCacheSize(Math.max(1, brokerProperties.getSessionCacheSize()));
-
-            JmsTemplate jmsTemplate = new JmsTemplate(cachingConnectionFactory);
-            jmsTemplate.setPubSubDomain(true);
-
-            String topic = isBlank(requestDto.getTopic()) ? brokerProperties.getTopic() : requestDto.getTopic();
+            var broker = connections.resolve(requestDto.getActiveMQIp(), requestDto.getId(), requestDto.getPw(), requestDto.getTopic());
+            publication = publisher.open(broker);
+            var activePublication = publication;
+            String topic = broker.topic();
             int workerCount = Math.max(1, requestDto.getWorkerCount());
             int totalMessageCount = Math.max(1, requestDto.getMessageCount());
             AtomicInteger nextIndex = new AtomicInteger(0);
@@ -76,8 +75,8 @@ public class JmsTemplateLoadTestLogic {
                         pacer.awaitTurn(messageIndex);
                         String message = createMessage(requestDto.getTcName(), currentWorkerIndex, messageIndex, requestDto.getPayload());
                         try {
-                            jmsTemplate.convertAndSend(topic, message);
-                            successCount.incrementAndGet();
+                            activePublication.publish(topic, message, Map.of());
+                            messageLogger.logMessage(taskId, successCount.incrementAndGet(), message);
                         } catch (Exception sendError) {
                             failureCount.incrementAndGet();
                         }
@@ -92,17 +91,22 @@ public class JmsTemplateLoadTestLogic {
             }
 
             boolean cancelled = taskCancellationLogic.isCancellationRequested(taskId);
+            outcome = cancelled ? "CANCELLED" : failureCount.get() > 0 ? "FAILED" : "SUCCESS";
             return result(taskId, totalMessageCount, successCount.get(), failureCount.get(), startedAt, workerCount, requestDto.getTargetTps(), cancelled, cancelled ? "cancelled" : "completed");
         } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             long failed = Math.max(1, failureCount.get());
-            return result(taskId, requestDto.getMessageCount(), successCount.get(), failed, startedAt, Math.max(1, requestDto.getWorkerCount()), requestDto.getTargetTps(), false, e.getClass().getSimpleName() + ": " + e.getMessage());
+            return result(taskId, requestDto.getMessageCount(), successCount.get(), failed, startedAt, Math.max(1, requestDto.getWorkerCount()), requestDto.getTargetTps(), false, e.getClass().getSimpleName());
         } finally {
-            taskCancellationLogic.removeTask(taskId);
             if (executorService != null) {
                 executorService.shutdownNow();
             }
-            if (cachingConnectionFactory != null) {
-                cachingConnectionFactory.destroy();
+            try {
+                if (publication != null) publication.close();
+            } finally {
+                taskCancellationLogic.removeTask(taskId);
+                log.info("taskId={} sentCount={} failureCount={} elapsedMillis={} result={}", taskId,
+                        successCount.get(), failureCount.get(), (System.nanoTime() - startedAt) / 1_000_000, outcome);
             }
         }
     }

@@ -7,6 +7,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -16,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -35,7 +36,12 @@ class DryRunJsonContractTest {
     private JsonMapper jsonMapper;
 
     @TempDir
-    Path tempDir;
+    static Path tempDir;
+
+    @DynamicPropertySource
+    static void filesBaseDir(DynamicPropertyRegistry registry) {
+        registry.add("simulator.files.base-dir", () -> tempDir.toString());
+    }
 
     @Test
     void randomDryRunReturnsJsonObjectsWithTheExistingEnvelope() throws Exception {
@@ -117,20 +123,13 @@ class DryRunJsonContractTest {
     }
 
     @Test
-    void fileDataDryRunRetainsExistingErrorForUnescapedQuotesInJsonTemplate() throws Exception {
-        // Also reproduced on bc3f0ca: template rendering does not JSON-escape CSV values.
+    void fileDataDryRunEscapesQuotedCsvValues() throws Exception {
         Files.writeString(tempDir.resolve("format.txt"), "\"status\": \"{{status}}\"");
         Files.writeString(tempDir.resolve("data.csv"), "status\n\"quoted \"\"text\"\"\"\n");
-
-        assertThatThrownBy(() -> dryRun("/file-data", Map.of(
-                "tcName", "TC001",
-                "messageCount", 1,
-                "filePath", tempDir.toString(),
-                "formatFileName", "format.txt",
-                "dataFileName", "data.csv"
-        )))
-                .hasCauseInstanceOf(IllegalArgumentException.class)
-                .cause().hasMessage("Generated message is not valid JSON.");
+        JsonNode root = dryRun("/file-data", Map.of(
+                "tcName", "TC001", "messageCount", 1, "filePath", tempDir.toString(),
+                "formatFileName", "format.txt", "dataFileName", "data.csv"));
+        assertThat(payload(root, 0).get("status").asString()).isEqualTo("quoted \"text\"");
     }
 
     private JsonNode dryRun(String suffix, Map<String, Object> request) throws Exception {

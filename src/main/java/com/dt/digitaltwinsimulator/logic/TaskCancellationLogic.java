@@ -15,7 +15,9 @@ public class TaskCancellationLogic {
     }
 
     public void registerTask(String taskId) {
-        cancellationTokens.putIfAbsent(taskId, new AtomicBoolean(false));
+        if (cancellationTokens.putIfAbsent(taskId, new AtomicBoolean(false)) != null) {
+            throw new DuplicateTaskException(taskId);
+        }
     }
 
     public boolean requestCancellation(String taskId) {

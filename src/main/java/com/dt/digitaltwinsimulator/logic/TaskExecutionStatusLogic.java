@@ -2,6 +2,8 @@ package com.dt.digitaltwinsimulator.logic;
 
 import com.dt.digitaltwinsimulator.entity.TaskExecutionStatus;
 import com.dt.digitaltwinsimulator.entity.dto.TaskExecutionInfoDto;
+import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
+@Slf4j
 @Service
 public class TaskExecutionStatusLogic {
     private final ConcurrentHashMap<String, TaskExecutionRecord> records = new ConcurrentHashMap<>();
@@ -22,6 +25,7 @@ public class TaskExecutionStatusLogic {
     private int maxHistory;
 
     public void markRunning(String taskId) {
+        log.info("taskId={} sentCount=0 elapsedMillis=0 result=RUNNING", taskId);
         records.put(taskId, new TaskExecutionRecord(taskId, TaskExecutionStatus.RUNNING, LocalDateTime.now(), null, new AtomicLong(0), ""));
         trimHistoryIfNeeded();
     }
@@ -72,6 +76,9 @@ public class TaskExecutionStatusLogic {
             }
             return new TaskExecutionRecord(taskId, status, oldRecord.startedAt(), LocalDateTime.now(), oldRecord.sentCount(), message);
         });
+        var record = records.get(taskId);
+        log.info("taskId={} sentCount={} elapsedMillis={} result={}", taskId, record.sentCount().get(),
+                Duration.between(record.startedAt(), record.finishedAt()).toMillis(), status);
         trimHistoryIfNeeded();
     }
 
