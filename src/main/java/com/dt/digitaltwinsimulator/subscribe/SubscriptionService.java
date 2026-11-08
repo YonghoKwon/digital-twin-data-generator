@@ -11,6 +11,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.charset.*;
 import java.time.Instant;
 import java.util.*;
@@ -153,12 +154,13 @@ public class SubscriptionService implements SmartLifecycle {
         }
 
         private void record(Message message) throws JMSException {
-            String type = "OTHER", body = null, base64 = null, messageId = null;
+            String type = "OTHER", encoding = "BINARY", body = null, base64 = null, messageId = null;
             long size = 0;
             boolean truncated = false;
             JsonNode json = null;
             if (message instanceof TextMessage text) {
                 type = "TEXT";
+                encoding = "UTF8_TEXT";
                 String value = text.getText() == null ? "" : text.getText();
                 byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
                 size = bytes.length;
@@ -173,10 +175,33 @@ public class SubscriptionService implements SmartLifecycle {
             } else if (message instanceof BytesMessage bytes) {
                 type = "BYTES";
                 size = bytes.getBodyLength();
-                byte[] head = new byte[(int)Math.min(256, size)];
-                if (head.length > 0) bytes.readBytes(head);
-                base64 = Base64.getEncoder().encodeToString(head);
-                truncated = size > head.length;
+                // Keep the existing binary head even when maxBodyBytes is smaller than 256.
+                byte[] head = new byte[(int)Math.min(Math.max(maxBodyBytes, 256), size)];
+                int offset = 0;
+                while (offset < head.length) {
+                    byte[] chunk = new byte[head.length - offset];
+                    int read = bytes.readBytes(chunk);
+                    if (read <= 0) throw new JMSException("Incomplete BytesMessage body.");
+                    System.arraycopy(chunk, 0, head, offset, read);
+                    offset += read;
+                }
+                int textLength = Math.min(head.length, maxBodyBytes);
+                truncated = size > textLength;
+                try {
+                    body = strictUtf8Head(head, textLength, !truncated);
+                    encoding = "UTF8_TEXT";
+                    if (!truncated) {
+                        try {
+                            json = mapper.readTree(body);
+                            if (json != null && json.isObject() && json.hasNonNull("MESSAGE_ID"))
+                                messageId = json.get("MESSAGE_ID").asText();
+                        } catch (RuntimeException ignored) { /* Valid UTF-8 need not be JSON. */ }
+                    }
+                } catch (CharacterCodingException invalidUtf8) {
+                    byte[] binaryHead = Arrays.copyOf(head, Math.min(256, head.length));
+                    base64 = Base64.getEncoder().encodeToString(binaryHead);
+                    truncated = size > binaryHead.length;
+                }
             }
             var headers = new LinkedHashMap<String, Object>();
             for (Enumeration<?> names = message.getPropertyNames(); names.hasMoreElements();) {
@@ -186,7 +211,7 @@ public class SubscriptionService implements SmartLifecycle {
             String topic = message.getJMSDestination() instanceof Topic destination ? destination.getTopicName() : settings.topic();
             ReceivedMessage received;
             synchronized (this) {
-                received = new ReceivedMessage(++receivedCount, Instant.now(), topic, type, size, body, json,
+                received = new ReceivedMessage(++receivedCount, Instant.now(), topic, type, encoding, size, body, json,
                         base64, messageId, Collections.unmodifiableMap(headers), truncated);
                 lastReceivedAt = received.receivedAt();
                 if (buffer.size() >= bufferSize) buffer.removeFirst();
@@ -281,6 +306,15 @@ public class SubscriptionService implements SmartLifecycle {
             return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.IGNORE)
                     .decode(ByteBuffer.wrap(bytes, 0, Math.min(bytes.length, max))).toString();
         } catch (CharacterCodingException e) { throw new IllegalArgumentException("Invalid UTF-8 text.", e); }
+    }
+
+    private static String strictUtf8Head(byte[] bytes, int length, boolean complete) throws CharacterCodingException {
+        var decoder = StandardCharsets.UTF_8.newDecoder(); // REPORT invalid input, never insert replacement characters.
+        var output = CharBuffer.allocate(length);
+        var result = decoder.decode(ByteBuffer.wrap(bytes, 0, length), output, complete);
+        if (result.isError()) result.throwException();
+        // An incomplete final code point is allowed only at a truncated preview boundary.
+        return output.flip().toString();
     }
 }
 

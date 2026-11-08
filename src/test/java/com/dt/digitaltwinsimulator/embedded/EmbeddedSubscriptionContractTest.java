@@ -95,11 +95,74 @@ class EmbeddedSubscriptionContractTest {
             JsonNode message = waitMessages(id, 1).get(0);
             assertThat(message.get("sizeBytes").asLong()).isEqualTo(binary.length);
             assertThat(message.get("type").asText()).isEqualTo("BYTES");
+            assertThat(message.get("encoding").asText()).isEqualTo("BINARY");
             assertThat(message.get("bodyBase64Head").asText()).isEqualTo(
                     Base64.getEncoder().encodeToString(Arrays.copyOf(binary, 256)));
             assertThat(message.get("truncated").asBoolean()).isTrue();
             client.sendText("s4.large", "still-connected");
             assertThat(waitMessages(id, 2).get(1).get("body").asText()).isEqualTo("still-connected");
+        }
+    }
+
+    @Test void contentLengthStompJsonIsUtf8TextAndQueryableByMessageId() throws Exception {
+        String id = create("bytes-json", "s4.bytes-json", 10, 65536);
+        String body = "{\"MESSAGE_ID\":\"UE-BYTES-1\",\"DATA_MAP\":{\"label\":\"센서😀\"}}";
+        try (var client = new StompWebSocketClient(STOMP)) {
+            client.connected();
+            client.sendBytes("s4.bytes-json", body.getBytes(StandardCharsets.UTF_8));
+            waitCount(id, 1);
+            JsonNode result = json(get("/dt/subscriptions/" + id + "/messages?messageId=UE-BYTES-1"));
+            assertThat(result.size()).isEqualTo(1);
+            JsonNode message = result.get(0);
+            assertThat(message.get("type").asText()).isEqualTo("BYTES");
+            assertThat(message.get("encoding").asText()).isEqualTo("UTF8_TEXT");
+            assertThat(message.get("body").asText()).isEqualTo(body);
+            assertThat(message.get("bodyJson")).isEqualTo(mapper.readTree(body));
+            assertThat(message.get("messageId").asText()).isEqualTo("UE-BYTES-1");
+            assertThat(message.get("sizeBytes").asInt()).isEqualTo(body.getBytes(StandardCharsets.UTF_8).length);
+            assertThat(message.get("truncated").asBoolean()).isFalse();
+            assertThat(message.get("bodyBase64Head").isNull()).isTrue();
+        }
+    }
+
+    @Test void invalidUtf8BytesRemainBinaryWithoutTextOrJson() throws Exception {
+        String id = create("bytes-invalid", "s4.bytes-invalid", 10, 64);
+        byte[] binary = new byte[512];
+        new Random(444).nextBytes(binary);
+        binary[0] = (byte)0xff;
+        try (var client = new StompWebSocketClient(STOMP)) {
+            client.connected(); client.sendBytes("s4.bytes-invalid", binary);
+            JsonNode message = waitMessages(id, 1).get(0);
+            assertThat(message.get("encoding").asText()).isEqualTo("BINARY");
+            assertThat(message.get("body").isNull()).isTrue();
+            assertThat(message.get("bodyJson").isNull()).isTrue();
+            assertThat(message.get("messageId").isNull()).isTrue();
+            assertThat(message.get("bodyBase64Head").asText()).isEqualTo(
+                    Base64.getEncoder().encodeToString(Arrays.copyOf(binary, 256)));
+        }
+    }
+
+    @Test void truncatedUtf8BytesDropOnlyIncompleteFinalCodePointAndDoNotParseJson() throws Exception {
+        String id = create("bytes-truncated", "s4.bytes-truncated", 10, 3);
+        try (var client = new StompWebSocketClient(STOMP)) {
+            client.connected(); client.sendBytes("s4.bytes-truncated", "a한글".getBytes(StandardCharsets.UTF_8));
+            JsonNode message = waitMessages(id, 1).get(0);
+            assertThat(message.get("encoding").asText()).isEqualTo("UTF8_TEXT");
+            assertThat(message.get("body").asText()).isEqualTo("a");
+            assertThat(message.get("bodyJson").isNull()).isTrue();
+            assertThat(message.get("messageId").isNull()).isTrue();
+            assertThat(message.get("truncated").asBoolean()).isTrue();
+        }
+    }
+
+    @Test void completeBytesWithIncompleteUtf8SequenceAreBinary() throws Exception {
+        String id = create("bytes-incomplete", "s4.bytes-incomplete", 10, 100);
+        try (var client = new StompWebSocketClient(STOMP)) {
+            client.connected(); client.sendBytes("s4.bytes-incomplete", new byte[]{(byte)0xe3, (byte)0x81});
+            JsonNode message = waitMessages(id, 1).get(0);
+            assertThat(message.get("encoding").asText()).isEqualTo("BINARY");
+            assertThat(message.get("body").isNull()).isTrue();
+            assertThat(message.get("bodyBase64Head").asText()).isEqualTo("44E=");
         }
     }
 
