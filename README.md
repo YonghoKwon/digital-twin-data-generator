@@ -462,3 +462,123 @@ Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용합니다. 설치된 M
 경로 제한, JSON escape/전송 전 검증, 400/502/409, EAI 기본 출력 바이트, typedValues를 포함합니다.
 Windows에서 symlink 생성 권한이 없으면 해당 테스트만 Assumptions로 skip하며 사유를 결과에 기록합니다.
 CI는 GitHub Actions에서 Java 21 기준으로 `mvn -B test`를 수행합니다.
+
+## 내장 브로커와 구독
+
+외부 브로커 없이 UE DTCore와 테스트할 때 Artemis **2.44.0** 내장 브로커를 켭니다.
+기본/local 모두 `simulator.embedded-broker.enabled=false`이며 Boot Artemis starter 없이
+`EmbeddedActiveMQ`를 직접 구성합니다.
+
+```powershell
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.arguments=--simulator.embedded-broker.enabled=true"
+# 또는
+java -jar target/digital-twin-simulator-0.0.1-SNAPSHOT.jar --simulator.embedded-broker.enabled=true
+```
+
+| 설정 (`simulator.embedded-broker.` 아래) | 기본값 | 의미 |
+| --- | --- | --- |
+| `enabled` | `false` | 명시적으로 켬 |
+| `use-as-default` | `true` | enabled일 때 주소 생략 요청의 기본값 |
+| `host` | `0.0.0.0` | bind 주소 |
+| `core-port` / `stomp-port` | `61626` / `61623` | JMS core / STOMP TCP+WebSocket 공용 |
+| `username` / `password` | `artemis` / `artemis` | 허용할 단일 계정 |
+| `max-frame-bytes` | `2097152` (2 MiB) | WebSocket 프레임 한도 (STOMP 헤더 포함) |
+| `stomp-min-large-message-size` | `102400` | large message 전환 임계 바이트 |
+| `max-size-bytes` | `104857600` | 주소별 메모리 한도 |
+| `address-full-policy` | `PAGE` | `PAGE` 또는 `DROP` 선택 가능 |
+
+Artemis 기본 65536바이트 WebSocket 프레임 한도로는 1 MiB 단일 프레임을 받을 수 없어 2 MiB로 올렸습니다.
+더 큰 PCD에는 STOMP 헤더 여유를 포함해 올리세요.
+journal 영속성은 끄며 PAGE/large message용 파일은 OS 임시 디렉터리에 만들고 정상 종료 시 삭제합니다.
+JMS property 원문 노출을 막기 위해 내장 브로커 실행 중 Artemis audit logger를 끕니다.
+앱 종료 순서는 구독→브로커입니다. 브로커 기동 실패에도 HTTP 앱은 유지되고
+`GET /dt/broker`에 `running=false, lastError`가 표시됩니다.
+
+enabled 및 use-as-default가 true이고 요청의 `activeMQIp`가 생략/공백이면 일반/file/file-data 전송,
+JmsTemplate 부하 테스트, 구독 및 `BrokerConnectionService.resolve`를 사용하는 API가
+내장 core 주소와 계정을 기본값으로 사용합니다. 요청 `id/pw`는 각각 override할 수 있습니다.
+명시 URL은 기존 외부 기본 계정을 사용하므로 필요한 `id/pw`도 함께 지정하세요.
+내장 브로커 기동 실패 시 외부로 자동 우회하지 않습니다.
+
+UE DTCoreSettings 예시 (위에서 설정한 계정 입력):
+
+```ini
+WebSocketUrl=ws://<PC IP>:61623
+Login=<설정값>
+Passcode=<설정값>
+```
+
+다른 PC의 UE에는 시뮬레이터 PC 방화벽 TCP 61623을 허용합니다.
+HTTP API/SSE는 기본 8080, 외부 JMS 클라이언트는 61626입니다.
+0.0.0.0은 bind용이며 UE에는 실제 PC IP를 넣습니다.
+상태 API는 요청 host 기준 URL, dtcoreSettingsHint, 주소별 routingTypes/messageCount/consumerCount와
+대용량 settings를 반환하며 비밀번호는 포함하지 않습니다.
+
+**2.44.0 검증 계약:** JMS topic `topic.cep.output.0`과 STOMP `destination:topic.cep.output.0`은
+같은 주소이며 MULTICAST 기본, prefix 불필요입니다. `/topic/`을 임의로 붙이지 마세요.
+JMS `dx_schema_version` string property는 동일 STOMP 헤더로 전달됩니다.
+`dx-schema-version`은 Jakarta JMS client가 `AMQ139012` (유효한 Java identifier 아님)로
+전송 전 거부하므로 공통 전송 헤더는 underscore 형식을 사용합니다.
+STOMP SEND에 `content-length`가 없으면 TEXT, 있으면 BYTES로 수신됩니다.
+UTF-8 텍스트도 content-length가 있으면 BYTES입니다. WebSocket text/binary 프레임 종류와 별개이므로
+DTCore의 실제 STOMP 헤더에 맞춰 확인하세요.
+
+| HTTP | 경로 | 결과 |
+| --- | --- | --- |
+| GET | `/dt/broker` | disabled일 때도 상태 제공 |
+| POST | `/dt/subscriptions` | 201 및 Location |
+| GET | `/dt/subscriptions` | 목록, 상태, 누적 수/마지막 수신/오류 |
+| GET | `/dt/subscriptions/{id}/messages?limit=100&afterSeq=0&messageId=UE-1` | 일치 기록, seq 오름차순 |
+| GET | `/dt/subscriptions/{id}/stream` | SSE 신규 기록 |
+| DELETE | `/dt/subscriptions/{id}/messages` | 버퍼 비움, 204 |
+| DELETE | `/dt/subscriptions/{id}` | 구독/연결 제거, 204 |
+
+```http
+POST http://localhost:8080/dt/subscriptions
+Content-Type: application/json
+
+{
+  "subscriptionId": "ue-sensors",
+  "topic": "dt.sensor.#",
+  "bufferSize": 1000,
+  "maxBodyBytes": 65536
+}
+```
+
+topic은 필수입니다. subscriptionId 생략 시 UUID, 지정 시 영문자/숫자/`_.-` 1~128자입니다.
+`activeMQIp/id/pw`는 전송과 같은 override입니다.
+내장 브로커 wildcard는 점 구분: `*`는 한 단어, `#`는 0개 이상의 단어
+(예: `dt.sensor.*`, `dt.sensor.#`). 외부 브로커에서는 해당 브로커 설정을 따릅니다.
+non-durable topic consumer이므로 연결 전/재연결 중 메시지를 복원하지 않습니다.
+연결 손실 시 RECONNECTING/마지막 오류를 표시하고 1→2→4→8→16→30초 간격으로 재연결합니다.
+연결 시 CONNECTED, 삭제/종료 시 STOPPED로 닫은 뒤 목록에서 제거합니다.
+
+bufferSize 기본 1000, 허용 1~`simulator.subscribe.max-buffer`(기본 10000),
+동시 구독은 `simulator.subscribe.max-subscriptions`(기본 20)까지입니다.
+오래된 기록부터 버리며 버퍼를 비워도 receivedCount/seq는 계속 증가합니다.
+조회 limit 기본 100, 허용 1~max-buffer이며 afterSeq는 초과(>) 조건, messageId와 AND입니다.
+중복 ID 409 `DUPLICATE_SUBSCRIPTION_ID`, 한도 초과 429 `SUBSCRIPTION_LIMIT_EXCEEDED`,
+없는 ID 404 `SUBSCRIPTION_NOT_FOUND`, 입력 오류 400, 연결 실패 502입니다.
+오류 JSON은 `{"error","message"}` 형식입니다.
+
+기록: `seq, receivedAt, topic, type, sizeBytes, body, bodyJson, bodyBase64Head, messageId, properties, truncated`.
+TEXT는 UTF-8 바이트 기준 maxBodyBytes(기본 65536, 양수)까지 미리보기를 보관합니다.
+완전한 JSON이면 bodyJson을 JSON 값으로 제공하며 최상위 MESSAGE_ID를 messageId로 추출합니다.
+잘린 TEXT는 bodyJson=null로 두어 제한을 우회하지 않습니다.
+BYTES는 원래 크기와 앞 256바이트 Base64만 보관합니다. 미리보기가 짧으면 truncated=true입니다.
+다른 JMS 메시지는 OTHER입니다. password/passcode/token/secret/authorization/API key 등 민감 property는
+마스킹하며 메시지 본문은 UE 디버깅용 원문 미리보기입니다.
+
+```bash
+curl -N http://localhost:8080/dt/subscriptions/ue-sensors/stream
+```
+
+SSE는 ready 이벤트 뒤 새 기록을 `event: message`, `id: <seq>`로 보내고 15초마다 keepalive를 보냅니다.
+기존 기록 재생/Last-Event-ID 복원은 하지 않으며 누락분은 messages?afterSeq=로 조회합니다.
+느린 SSE 대기열이 min(bufferSize,256)을 넘으면 해당 연결을 닫습니다.
+SSE 경로만 HTTP body logging에서 제외해 응답 버퍼링을 방지합니다.
+
+`.\mvnw.cmd -B test`는 외부 브로커 없이 임의 포트 내장 브로커와 JDK 원시 WebSocket STOMP로
+양방향 본문/헤더, 1 MiB 단일 바이너리 프레임, CRUD/버퍼/마스킹/SSE/재연결/포트 충돌을 검증합니다.
+근거: [Artemis 2.44.0 STOMP](https://github.com/apache/artemis/blob/2.44.0/docs/user-manual/stomp.adoc),
+[2.44.0 wildcard](https://github.com/apache/artemis/blob/2.44.0/docs/user-manual/wildcard-syntax.adoc).
