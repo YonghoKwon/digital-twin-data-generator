@@ -9,7 +9,7 @@
 기술 버전: Java 21, Spring Boot 4.1.2, springdoc-openapi 3.2.0, Apache Artemis Jakarta client 2.57.0 (`org.apache.artemis`).
 JSON 처리는 Jackson 3 (`tools.jackson.*`)와 Spring이 주입하는 `JsonMapper`를 사용합니다.
 Jackson annotation 패키지는 `com.fasterxml.jackson.annotation`을 유지하며, `spring.jackson.use-jackson2-defaults=true`로 기존 JSON 기본 동작을 유지합니다.
-JPA/H2/Postgres와 H2 콘솔은 유지하며, Boot 4에서는 콘솔 자동설정을 위해 `spring-boot-h2console` 모듈이 필요합니다.
+JPA/H2/Postgres, H2 콘솔과 개발용 `/test` API는 제외했습니다. 설정은 application.properties로 통합하며 virtual threads와 포트 8080을 유지합니다.
 
 현재 주요 기능:
 
@@ -102,6 +102,40 @@ POST /activemq/task/cancel-task/{taskId}
 ```
 
 ## 요청 필드 메모
+
+일반 format/value 요청의 `typedValues`는 기본 false입니다. true일 때 Integer/Double/Boolean 랜덤값과 value 값을 JSON number/boolean으로 출력합니다.
+String/Date는 문자열이며 잘못된 타입 값은 오류입니다. false이면 기존 문자열 출력을 유지합니다.
+JmsTemplate 요청도 `activeMQIp`, `id`, `pw`, `topic` override를 지원하며 생략/공백이면 서버 기본값을 사용합니다.
+
+## S1 공통 브로커·파일·오류 규칙
+
+- 공통 계층: `broker.BrokerSettings`, `BrokerConnectionService`, `MessagePublisher`, `JmsMessagePublisher`.
+- 발행 scope는 task별 connection/session cache를 닫습니다. headers는 JMS string property로 설정합니다.
+- 비동기 전송 3종은 요청 스레드에서 입력 검증·파일 읽기·dry-run 1건 JSON 검증 후 connect/start/close를 확인합니다.
+- 입력/파일/JSON 오류는 400, 브로커 연결 실패는 502, 실행 중인 JmsTemplate taskId 중복은 409입니다.
+- 오류 JSON은 `{"error","message"}`이며 error 값은 `INVALID_REQUEST`, `BROKER_CONNECTION_FAILED`, `DUPLICATE_TASK_ID`입니다.
+- 성공 문자열, API path, dry-run 및 LoadTestResultDto 구조는 유지합니다. 이후 행에서 생성이 실패하면 task를 FAILED로 처리합니다.
+
+```properties
+simulator.files.base-dir=./data
+# local profile: c:/Project
+simulator.activemq.connect-timeout-ms=3000
+simulator.message-log.sample-every=0
+# EAI 필드별 override 예시 (underscore 보존)
+simulator.message.file-data-extra-fields[works_code]=K
+simulator.message.file-data-extra-fields[interface_data_t_len]=760
+```
+
+`filePath="."`는 base-dir 자체, 상대 경로는 base-dir 기준입니다. 절대 경로는 base-dir 내부만 허용합니다.
+정규화 경로와 실제 경로를 검사해 `..`, 외부 절대 경로/다른 드라이브, 외부 symlink 탈출을 차단합니다.
+timeout은 `callTimeout`, `callFailoverTimeout`, `connect-timeout-millis`에 적용하고 initialConnectAttempts/reconnectAttempts는 0입니다.
+file-data EAI 기본 필드의 순서·값(빈 문자열 및 공백 포함)은 기존과 같으며 LinkedHashMap 설정으로 관리합니다.
+신규 설정 키는 뒤에 추가됩니다. 기본 바이트 계약은 회귀 테스트로 고정합니다.
+placeholder는 JSON 따옴표/escape 상태를 추적해 문자열 내부이면 JSON escape, 외부이면 원문을 삽입합니다.
+전송 시에도 모든 생성 메시지를 JSON 검증합니다.
+
+테스트는 브로커 mock과 닫힌 포트로 실행하고 서버는 RANDOM_PORT를 사용합니다.
+Windows symlink 권한이 없으면 해당 테스트만 Assumptions로 skip하고 결과에 사유를 적습니다.
 
 일반/file/file-data/JmsTemplate 부하 테스트 요청에서 `targetTps`를 사용할 수 있습니다.
 
@@ -237,6 +271,8 @@ simulator.http-logging.max-payload-length=8000
 
 운영 로그에 민감 정보가 그대로 남지 않도록 합니다.
 메시지나 요청 내용을 로그로 남길 때는 `SensitiveLogMasker.mask(...)` 적용 여부를 확인합니다.
+메시지 본문은 DEBUG, sample-every=0이면 INFO 샘플 끔, 양수 N이면 성공 전송 N건마다 INFO 1건입니다.
+task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 남깁니다.
 
 ## 작업 완료 후 문서 갱신 규칙
 
