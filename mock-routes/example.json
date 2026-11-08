@@ -1,0 +1,33 @@
+[
+  {
+    "id": "coil-get",
+    "method": "GET",
+    "path": "/api/coil/{coilId}",
+    "headers": { "Content-Type": "application/json", "X-Mock": "coil-get" },
+    "body": "{\"coilId\":\"{{path.coilId}}\",\"status\":\"RUNNING\",\"temperature\":{{random:Integer:10..20}},\"timestamp\":\"{{now}}\",\"seq\":{{seq}}}",
+    "enabled": true
+  },
+  {
+    "id": "coil-status",
+    "method": "POST",
+    "path": "/api/coil/{coilId}/status",
+    "body": "{\"coilId\":\"{{path.coilId}}\",\"status\":\"{{body.status}}\",\"phase\":\"updated\",\"seq\":{{seq}}}",
+    "delayMs": 15,
+    "responses": [
+      { "status": 202, "body": "{\"coilId\":\"{{path.coilId}}\",\"phase\":\"updating\",\"seq\":{{seq}}}" },
+      { "status": 200 }
+    ],
+    "cycle": false
+  },
+  {
+    "id": "injected-error",
+    "method": "GET",
+    "path": "/api/unstable",
+    "body": "{\"status\":\"ok\"}",
+    "fault": {
+      "errorRate": 1.0,
+      "errorStatus": 503,
+      "errorBody": "{\"error\":\"INJECTED_UNAVAILABLE\",\"seq\":{{seq}}}"
+    }
+  }
+]
