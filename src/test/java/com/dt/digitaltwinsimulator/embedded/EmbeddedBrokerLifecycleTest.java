@@ -21,7 +21,8 @@ class EmbeddedBrokerLifecycleTest {
             assertThat(broker.isRunning()).isFalse();
             assertThat(broker.status("localhost")).containsEntry("enabled", false).containsEntry("lastError", null);
             var external = new BrokerSettings("tcp://external:61616", "outside", "private", "topic.default");
-            assertThat(new EmbeddedBrokerDefaults(properties).defaults(external)).isEqualTo(external);
+            assertThat(new EmbeddedBrokerDefaults(properties, broker).defaults(external)).isEqualTo(external);
+            assertThat(broker.status("localhost")).containsEntry("defaultTarget", "EXTERNAL");
         } finally { broker.stop(); }
     }
 
@@ -29,20 +30,55 @@ class EmbeddedBrokerLifecycleTest {
         var properties = new EmbeddedBrokerProperties();
         properties.setEnabled(true);
         properties.setUsername("embedded-user"); properties.setPassword("private-embedded");
-        properties.setHost("0.0.0.0"); properties.setCorePort(61726);
-        var beans = new StaticListableBeanFactory(Map.of("defaults", new EmbeddedBrokerDefaults(properties)));
+        properties.setHost("0.0.0.0"); properties.setCorePort(EmbeddedSubscriptionContractTest.freePort());
+        properties.setStompPort(EmbeddedSubscriptionContractTest.freePort());
+        var broker = new EmbeddedBrokerService(properties);
+        var beans = new StaticListableBeanFactory(Map.of("defaults", new EmbeddedBrokerDefaults(properties, broker)));
         var external = new ActiveMqBrokerProperties();
         external.setBrokerUrl("tcp://external:61616");
         external.setUsername("outside"); external.setPassword("private-external");
         var connections = new BrokerConnectionService(external, beans.getBeanProvider(BrokerDefaultsProvider.class));
-        assertThat(connections.resolve(" ", null, " ", null)).isEqualTo(
-                new BrokerSettings("tcp://127.0.0.1:61726", "embedded-user", "private-embedded", external.getTopic()));
-        assertThat(connections.resolve(null, "override", "override-password", "override.topic")).isEqualTo(
-                new BrokerSettings("tcp://127.0.0.1:61726", "override", "override-password", "override.topic"));
-        assertThat(connections.resolve("tcp://explicit:61616", null, null, null)).isEqualTo(
-                new BrokerSettings("tcp://explicit:61616", "outside", "private-external", external.getTopic()));
-        properties.setUseAsDefault(false);
         assertThat(connections.resolve(null, null, null, null).url()).isEqualTo("tcp://external:61616");
+        try {
+            broker.start();
+            assertThat(broker.isRunning()).isTrue();
+            assertThat(broker.status("localhost")).containsEntry("defaultTarget", "EMBEDDED");
+            assertThat(connections.resolve(" ", null, " ", null)).isEqualTo(
+                    new BrokerSettings("tcp://127.0.0.1:" + properties.getCorePort(), "embedded-user", "private-embedded", external.getTopic()));
+            assertThat(connections.resolve(null, "override", "override-password", "override.topic")).isEqualTo(
+                    new BrokerSettings("tcp://127.0.0.1:" + properties.getCorePort(), "override", "override-password", "override.topic"));
+            assertThat(connections.resolve("tcp://explicit:61616", null, null, null)).isEqualTo(
+                    new BrokerSettings("tcp://explicit:61616", "outside", "private-external", external.getTopic()));
+            properties.setUseAsDefault(false);
+            assertThat(connections.resolve(null, null, null, null).url()).isEqualTo("tcp://external:61616");
+            assertThat(broker.status("localhost")).containsEntry("running", true).containsEntry("defaultTarget", "EXTERNAL");
+        } finally { broker.stop(); }
+        properties.setUseAsDefault(true);
+        assertThat(connections.resolve(null, null, null, null).url()).isEqualTo("tcp://external:61616");
+        assertThat(broker.status("localhost")).containsEntry("defaultTarget", "EXTERNAL");
+    }
+
+    @Test void failedBrokerStartupFallsBackToExternalAddressAndCredentials() throws Exception {
+        var properties = new EmbeddedBrokerProperties();
+        properties.setEnabled(true);
+        properties.setStompPort(EmbeddedSubscriptionContractTest.freePort());
+        var broker = new EmbeddedBrokerService(properties);
+        var external = new ActiveMqBrokerProperties();
+        external.setBrokerUrl("tcp://external-fallback:61616");
+        external.setUsername("outside"); external.setPassword("private-external");
+        var beans = new StaticListableBeanFactory(Map.of("defaults", new EmbeddedBrokerDefaults(properties, broker)));
+        var connections = new BrokerConnectionService(external, beans.getBeanProvider(BrokerDefaultsProvider.class));
+        try (var occupied = new ServerSocket(0)) {
+            properties.setCorePort(occupied.getLocalPort());
+            try {
+                broker.start();
+                assertThat(broker.status("localhost")).containsEntry("running", false).containsEntry("defaultTarget", "EXTERNAL");
+                assertThat(connections.resolve(null, null, null, null)).isEqualTo(
+                        new BrokerSettings(external.getBrokerUrl(), external.getUsername(), external.getPassword(), external.getTopic()));
+                assertThat(connections.resolve(null, "override", "override-password", "override.topic")).isEqualTo(
+                        new BrokerSettings(external.getBrokerUrl(), "override", "override-password", "override.topic"));
+            } finally { broker.stop(); }
+        }
     }
 
     @Test void occupiedStompPortLeavesApplicationAndBrokerStatusApiAvailable() throws Exception {
@@ -61,7 +97,7 @@ class EmbeddedBrokerLifecycleTest {
                     java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:" + port + "/dt/broker")).build(),
                     java.net.http.HttpResponse.BodyHandlers.ofString());
             assertThat(response.statusCode()).isEqualTo(200);
-            assertThat(response.body()).contains("\"running\":false", "\"lastError\":");
+            assertThat(response.body()).contains("\"running\":false", "\"lastError\":", "\"defaultTarget\":\"EXTERNAL\"");
         }
     }
 

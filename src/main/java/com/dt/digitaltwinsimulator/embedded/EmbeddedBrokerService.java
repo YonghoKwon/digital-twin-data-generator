@@ -113,7 +113,11 @@ public class EmbeddedBrokerService implements SmartLifecycle {
     }
 
     @Override
-    public boolean isRunning() { return broker != null && broker.getActiveMQServer() != null && broker.getActiveMQServer().isStarted(); }
+    public synchronized boolean isRunning() { return broker != null && broker.getActiveMQServer() != null && broker.getActiveMQServer().isStarted(); }
+
+    public synchronized boolean isDefaultTarget() {
+        return properties.isEnabled() && properties.isUseAsDefault() && isRunning();
+    }
 
     @Override
     public int getPhase() { return 0; }
@@ -123,6 +127,7 @@ public class EmbeddedBrokerService implements SmartLifecycle {
         var result = new LinkedHashMap<String, Object>();
         result.put("enabled", properties.isEnabled());
         result.put("running", isRunning());
+        result.put("defaultTarget", isDefaultTarget() ? "EMBEDDED" : "EXTERNAL");
         result.put("version", "2.44.0");
         result.put("coreUrl", properties.endpoint("tcp", host, properties.getCorePort()));
         result.put("stompUrl", properties.endpoint("tcp", host, properties.getStompPort()));

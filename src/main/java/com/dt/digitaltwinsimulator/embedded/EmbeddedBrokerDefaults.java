@@ -7,12 +7,16 @@ import org.springframework.stereotype.Component;
 @Component
 public class EmbeddedBrokerDefaults implements BrokerDefaultsProvider {
     private final EmbeddedBrokerProperties properties;
+    private final EmbeddedBrokerService broker;
 
-    public EmbeddedBrokerDefaults(EmbeddedBrokerProperties properties) { this.properties = properties; }
+    public EmbeddedBrokerDefaults(EmbeddedBrokerProperties properties, EmbeddedBrokerService broker) {
+        this.properties = properties;
+        this.broker = broker;
+    }
 
     @Override
     public BrokerSettings defaults(BrokerSettings external) {
-        if (!properties.isEnabled() || !properties.isUseAsDefault()) return external;
+        if (!broker.isDefaultTarget()) return external;
         return new BrokerSettings(properties.endpoint("tcp", properties.clientHost(), properties.getCorePort()),
                 properties.getUsername(), properties.getPassword(), external.topic());
     }
