@@ -7,7 +7,7 @@ REST API 요청으로 특정 포맷의 데이터를 대량 생성한 뒤 ActiveM
 - Java 21
 - Spring Boot 4.1.2
 - springdoc-openapi 3.2.0
-- Apache Artemis Jakarta client 2.57.0 (`org.apache.artemis`)
+- Apache Artemis Jakarta client 2.44.0 (`org.apache.activemq`, 운영 브로커 2.44.0과 동일 버전으로 고정)
 - Jackson 3 (`tools.jackson.*`, Spring이 제공하는 `JsonMapper` 사용)
 
 JSON 요청/응답의 기존 기본 동작은 `spring.jackson.use-jackson2-defaults=true`로 유지합니다.
