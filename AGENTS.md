@@ -261,3 +261,11 @@ simulator.http-logging.max-payload-length=8000
 - 테스트 실행 방법
 
 변경이 필요 없다고 판단한 경우에도 최종 응답에 세 파일 확인 여부를 명시합니다.
+
+## REST Mock
+
+`com.dt.digitaltwinsimulator.mock` 패키지는 `/mock/**` 서빙과 `/mock-admin` 관리 API를 제공합니다.
+`simulator.mock.base-path`, `routes-dir`, `journal-size`, `max-delay-ms`로 설정하며 route/호출 기록은 메모리에만 저장합니다.
+route 파일은 `mock-routes/*.json`, 가이드는 [docs/rest-mock.md](docs/rest-mock.md), 요청 예시는 [src/main/rest-mock.http](src/main/rest-mock.http)입니다.
+관리 API는 Swagger의 `REST Mock Admin` 태그에 노출하고 실제 서빙 경로는 숨깁니다.
+신규 테스트는 `src/test/java/com/dt/digitaltwinsimulator/mock`에서 RANDOM_PORT/MockMvc로 실행하며 전체 게이트는 기존 `.\mvnw.cmd -B test`입니다.

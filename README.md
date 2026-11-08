@@ -375,3 +375,11 @@ Task 상태 이력 DB 저장 기능과 `/activemq/task/statuses` 계열 API는 �
 Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용합니다. 설치된 Maven으로 `mvn test`도 가능합니다.
 테스트는 외부 Artemis 브로커 없이 실행되며, dry-run의 `messages` object 응답도 검증합니다.
 CI는 GitHub Actions에서 Java 21 기준으로 `mvn -B test`를 수행합니다.
+
+## REST Mock
+
+UE DTCore API 테스트를 위한 `/mock/**` 서빙과 `/mock-admin` 관리 API를 제공합니다.
+`DTCoreSettings.TestApiUrl` 또는 `LocalApiUrl`을 `http://<host>:8080/mock`으로 설정합니다.
+`mock-routes/*.json`에 경로별 응답·템플릿·지연·순차 응답·오류를 정의하며 호출 기록은 메모리에 보관합니다.
+Swagger의 `REST Mock Admin` 태그에서 route CRUD/reload와 DataTable import를 실행할 수 있습니다.
+설정·JSON 스키마·UE 연결·테스트 방법은 [REST Mock 가이드](docs/rest-mock.md), 요청 예시는 [rest-mock.http](src/main/rest-mock.http)를 참고하세요.
