@@ -5,16 +5,31 @@ import jakarta.jms.Connection;
 import org.apache.activemq.artemis.core.remoting.impl.netty.TransportConstants;
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 
 @Service
 public class BrokerConnectionService {
     private final ActiveMqBrokerProperties properties;
+    private BrokerDefaultsProvider defaultsProvider;
 
     public BrokerConnectionService(ActiveMqBrokerProperties properties) {
         this.properties = properties;
     }
 
+    @Autowired
+    public BrokerConnectionService(ActiveMqBrokerProperties properties, ObjectProvider<BrokerDefaultsProvider> defaults) {
+        this(properties);
+        this.defaultsProvider = defaults.getIfAvailable();
+    }
+
     public BrokerSettings resolve(String url, String user, String pw, String topic) {
+        if ((url == null || url.isBlank()) && defaultsProvider != null) {
+            var defaults = defaultsProvider.defaults(BrokerSettings.resolve(properties, null, null, null, null));
+            return new BrokerSettings(defaults.url(), user == null || user.isBlank() ? defaults.user() : user,
+                    pw == null || pw.isBlank() ? defaults.pw() : pw,
+                    topic == null || topic.isBlank() ? defaults.topic() : topic);
+        }
         return BrokerSettings.resolve(properties, url, user, pw, topic);
     }
 

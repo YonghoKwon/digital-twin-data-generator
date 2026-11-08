@@ -280,12 +280,15 @@ simulator.http-logging.enabled=true
 simulator.http-logging.include-request-body=true
 simulator.http-logging.include-response-body=true
 simulator.http-logging.max-payload-length=8000
+simulator.http-logging.exclude-paths=/dt/subscriptions/*/stream
 ```
 
 운영 로그에 민감 정보가 그대로 남지 않도록 합니다.
 메시지나 요청 내용을 로그로 남길 때는 `SensitiveLogMasker.mask(...)` 적용 여부를 확인합니다.
 메시지 본문은 DEBUG, sample-every=0이면 INFO 샘플 끔, 양수 N이면 성공 전송 N건마다 INFO 1건입니다.
 task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 남깁니다.
+`Accept`에 `text/event-stream`이 있거나 `exclude-paths`의 Ant 패턴 목록(쉼표 구분)에 맞으면
+공통 RequestResponseLoggingFilter에서 요청/응답 로깅과 본문 캐싱을 건너뜁니다.
 
 ## 작업 완료 후 문서 갱신 규칙
 
@@ -310,6 +313,53 @@ task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 남깁니
 - 테스트 실행 방법
 
 변경이 필요 없다고 판단한 경우에도 최종 응답에 세 파일 확인 여부를 명시합니다.
+
+## 내장 브로커와 구독
+
+- 내장 Artemis는 운영과 동일한 **2.44.0**, BOM 관리 서버/STOMP 모듈과 직접 구성한 EmbeddedActiveMQ를 사용합니다.
+  Boot Artemis starter를 추가하지 않습니다. 기본/local `simulator.embedded-broker.enabled=false`.
+- enabled 및 `use-as-default=true`이고 실제 running일 때만 주소 생략 요청의 core/계정 기본값을
+  `broker.BrokerDefaultsProvider`로 일반/file/file-data/JmsTemplate/구독에 공유합니다.
+  명시 URL은 기존 외부 기본값입니다. 요청 id/pw override를 지원합니다.
+  기동 실패/중지 시 외부 기본값으로 fallback하며 `/dt/broker`의 `defaultTarget`은 EMBEDDED 또는 EXTERNAL입니다.
+- host=0.0.0.0, core-port=61626, stomp-port=61623 (STOMP TCP+WebSocket 공용).
+  username/password 기본 artemis/artemis, 단일 계정만 허용, 상태/로그에 비밀번호를 노출하지 않습니다.
+- UE DTCoreSettings: `WebSocketUrl=ws://<PC IP>:61623`, `Login=<설정값>`, `Passcode=<설정값>`.
+  다른 PC에는 방화벽 TCP 61623 허용 (HTTP/SSE 8080, 외부 JMS 61626).
+- max-frame-bytes=2097152: 기본 65536이 1 MiB 단일 프레임을 거부하여 2 MiB 예비안 적용.
+  stomp-min-large-message-size=102400, max-size-bytes=104857600, address-full-policy=PAGE (DROP 선택 가능).
+  journal 비영속, PAGE/large 임시 파일 정상 종료 삭제, 실행 중 Artemis audit logger 비활성화.
+- JMS topic=STOMP destination 문자열, MULTICAST 기본, prefix 불필요.
+  `dx_schema_version`은 동일 STOMP 헤더, `dx-schema-version`은 JMS client가 AMQ139012로 전송 전 거부합니다.
+  S2 헤더는 underscore 사용. STOMP SEND content-length 없으면 TEXT, 있으면 BYTES (WS 프레임 종류와 별개).
+- POST /dt/subscriptions: topic 필수, subscriptionId 생략 시 UUID, activeMQIp/id/pw override,
+  bufferSize 기본 1000/최대 `simulator.subscribe.max-buffer=10000`, maxBodyBytes 기본 65536/양수.
+  동시 구독 최대 `simulator.subscribe.max-subscriptions=20`, non-durable.
+  wildcard는 점 구분, * 한 단어, # 0개 이상 단어 (`dt.sensor.#`).
+- 기록은 seq/receivedAt/topic/type(TEXT|BYTES|OTHER)/encoding(UTF8_TEXT|BINARY)/sizeBytes/body/bodyJson/bodyBase64Head/messageId/properties/truncated.
+  TEXT UTF-8 바이트 제한, 잘리지 않은 JSON만 bodyJson 제공, 최상위 MESSAGE_ID 추출.
+  BYTES도 maxBodyBytes 미리보기가 유효한 UTF-8이면 encoding=UTF8_TEXT/body 제공,
+  잘리지 않은 JSON은 bodyJson/최상위 MESSAGE_ID를 제공합니다. 잘린 UTF-8 끝의 불완전 문자는 제외합니다.
+  유효하지 않은 UTF-8은 encoding=BINARY/bodyBase64Head(앞 256바이트)만 제공합니다.
+  민감 property 마스킹, 버퍼 오래된 순서로 제거, 비워도 seq 유지.
+- CONNECTED/RECONNECTING/STOPPED, 누적 수/마지막 수신/오류 표시, 재연결 1~30초.
+  앱 종료 구독→브로커. 브로커 기동 실패에도 앱 유지, 상태 running=false/lastError.
+- API 목록:
+  `GET /dt/broker`, `POST /dt/subscriptions`, `GET /dt/subscriptions`,
+  `GET /dt/subscriptions/{id}/messages?limit=100&messageId=UE-1`,
+  `GET /dt/subscriptions/{id}/stream`, `DELETE /dt/subscriptions/{id}`,
+  `DELETE /dt/subscriptions/{id}/messages`.
+  생성 201, 삭제/비움 204, 중복 409, 한도 429, 없는 ID 404, 입력 400, 브로커 502, 오류 {"error","message"}.
+  afterSeq 생략 시 필터에 맞는 최근 limit개를 seq 오름차순 반환, 지정 시 그 seq 이후부터 limit개입니다.
+- SSE: `curl -N http://localhost:8080/dt/subscriptions/ue-sensors/stream`.
+  ready 후 신규 message 이벤트/seq ID, 15초 keepalive, 재생 없음.
+  느린 대기열 min(bufferSize,256) 초과 시 overflow 이벤트를 best-effort로 보내고 닫습니다.
+  data={"reason":"SLOW_CONSUMER","dropped":n}, n은 버린 대기 기록과 거부된 1건(전송 중 제외)입니다.
+  WARN은 구독 id만 남깁니다. 느린 SSE는 끊기므로 마지막 수신 seq의 afterSeq로 이어서 조회합니다.
+  공통 로깅 필터의 Accept/설정 경로 제외로 SSE 응답 버퍼링을 방지합니다.
+- `.\mvnw.cmd -B test`: 임의 포트 내장 브로커/JDK WebSocket STOMP로 본문/헤더 양방향,
+  1 MiB, CRUD/버퍼/마스킹/SSE/재연결/기동 실패/기존 API 기본값 검증.
+  상세 설정과 예시는 README의 같은 섹션과 src/main/부하테스트.http에 있습니다.
 
 ## 실시간 전송
 

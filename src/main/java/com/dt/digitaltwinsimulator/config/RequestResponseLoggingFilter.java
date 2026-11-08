@@ -7,20 +7,33 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Locale;
 
 @Slf4j
 @Component
 public class RequestResponseLoggingFilter extends OncePerRequestFilter {
     private final HttpLoggingProperties properties;
+    private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
     public RequestResponseLoggingFilter(HttpLoggingProperties properties) {
         this.properties = properties;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // Response caching buffers flushes and prevents live SSE delivery, regardless of the endpoint.
+        if (Collections.list(request.getHeaders("Accept")).stream()
+                .anyMatch(value -> value.toLowerCase(Locale.ROOT).contains("text/event-stream"))) return true;
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        return properties.getExcludePaths().stream().anyMatch(pattern -> pathMatcher.match(pattern, path));
     }
 
     @Override
