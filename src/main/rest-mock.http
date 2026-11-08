@@ -1,0 +1,97 @@
+@host = http://localhost:18083
+
+### GET: path / now / random / seq
+GET {{host}}/mock/api/coil/C001
+
+### POST: first 202, then 200 (last response holds)
+POST {{host}}/mock/api/coil/C001/status
+Content-Type: application/json
+
+{"status":"STOPPED"}
+
+### Deterministic 503 for DTCore retry testing
+GET {{host}}/mock/api/unstable
+
+### Recent requests (newest first)
+GET {{host}}/mock-admin/requests?limit=10
+
+### Routes
+GET {{host}}/mock-admin/routes
+
+### File load status: routeCount, lastReloadAt, lastReloadSuccessful, lastReloadError
+### Invalid startup files leave routes empty; fix the file then reload below.
+GET {{host}}/mock-admin/status
+
+### One route
+GET {{host}}/mock-admin/routes/coil-get
+
+### Create a sequence: 503 then 200, repeated in a cycle
+POST {{host}}/mock-admin/routes
+Content-Type: application/json
+
+{
+  "id": "retry-demo",
+  "method": "GET",
+  "path": "/api/retry/{id}",
+  "body": "{\"id\":\"{{path.id}}\",\"seq\":{{seq}},\"label\":\"{{query.label}}\"}",
+  "delayMinMs": 5,
+  "delayMaxMs": 10,
+  "responses": [{"status":503}, {"status":200}],
+  "cycle": true,
+  "enabled": true
+}
+
+### Call twice to observe 503 -> 200
+GET {{host}}/mock/api/retry/C001?label=hello
+X-Name: tester
+
+### Replace the complete route
+PUT {{host}}/mock-admin/routes/retry-demo
+Content-Type: application/json
+
+{
+  "id": "retry-demo",
+  "method": "GET",
+  "path": "/api/retry/{id}",
+  "status": 200,
+  "body": "{\"id\":\"{{path.id}}\",\"status\":\"recovered\"}"
+}
+
+### Explicit enable/disable
+PATCH {{host}}/mock-admin/routes/retry-demo/enabled
+Content-Type: application/json
+
+{"enabled": false}
+
+### Toggle enabled
+POST {{host}}/mock-admin/routes/retry-demo/toggle
+
+### Import UE DataTable JSON export; existing ids are skipped
+### ApiUrl gets a leading / and drops query; invalid rows return {id, reason} and valid rows continue.
+POST {{host}}/mock-admin/import/dtcore-api-table
+Content-Type: application/json
+
+[
+  {"Name":"GetCoil","ApiMethod":"EApiMethod::Get","ApiUrl":"api/coil/{coilId}?view=full","ApiResource":"Coil","ApiAction":"Get"},
+  {"Name":"SetStatus","ApiMethod":"POST","ApiUrl":"/api/coil/{coilId}/status"},
+  {"Name":"BadRoute","ApiMethod":"TRACE","ApiUrl":"/api/trace"}
+]
+
+### Import with overwrite
+POST {{host}}/mock-admin/import/dtcore-api-table?overwrite=true
+Content-Type: application/json
+
+[{"Name":"GetCoil","ApiMethod":"GET","ApiUrl":"/api/coil/{coilId}"}]
+
+### Delete a route
+DELETE {{host}}/mock-admin/routes/retry-demo
+
+### Reload all definitions from routes-dir (discards in-memory edits)
+### Failure returns 400, keeps routes/sequences, and updates /mock-admin/status.
+POST {{host}}/mock-admin/routes/reload
+
+### TRACE requests return 405; TRACE route creation/import is rejected.
+TRACE {{host}}/mock/api/coil/C001
+
+### Clear request journal
+DELETE {{host}}/mock-admin/requests
