@@ -15,9 +15,22 @@
     <description>digital-twin-simulator</description>
     <properties>
         <java.version>21</java.version>
-        <artemis.version>2.57.0</artemis.version>
+        <artemis-client.version>2.44.0</artemis-client.version>
         <springdoc.version>3.2.0</springdoc.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 운영 브로커(Artemis 2.44.0)와 클라이언트 버전을 맞추기 위해 Boot BOM의 Artemis 관리 버전을 덮어쓴다. -->
+            <dependency>
+                <groupId>org.apache.activemq</groupId>
+                <artifactId>artemis-bom</artifactId>
+                <version>${artemis-client.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -38,9 +51,9 @@
         </dependency>
 
         <dependency>
-            <groupId>org.apache.artemis</groupId>
+            <groupId>org.apache.activemq</groupId>
             <artifactId>artemis-jakarta-client</artifactId>
-            <version>${artemis.version}</version>
+            <version>${artemis-client.version}</version>
         </dependency>
 
         <dependency>
