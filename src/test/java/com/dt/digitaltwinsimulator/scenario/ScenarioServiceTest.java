@@ -164,6 +164,8 @@ class ScenarioServiceTest {
         assertThat(service.get("mock").failed()).isEqualTo(1); assertThat(service.get("mock").lastMark()).isEqualTo("after");
         assertThat(service.events("mock", 50)).extracting(ScenarioResponses.EventLog::result).containsExactly("MOCK_FAILED", "MARK");
         assertThat(mapper.writeValueAsString(service.events("mock", 50))).doesNotContain("private body", "payload");
+        // 원인 종류와 routeId는 보여야 사용자가 시나리오를 고칠 수 있다.
+        assertThat(service.events("mock", 50).getFirst().error()).contains("route 'missing'", "IllegalStateException");
     }
     @Test void eventHistoryIsBoundedAtFiveHundred() throws Exception {
         service.create(request("logs", "", "{\"at\":0,\"type\":\"MARK\",\"label\":\"x\",\"repeat\":{\"count\":600,\"everyMs\":0}}")); complete("logs");

@@ -2,6 +2,7 @@ package com.dt.digitaltwinsimulator.scenario;
 
 import com.dt.digitaltwinsimulator.broker.*;
 import com.dt.digitaltwinsimulator.logic.MessageBodyLogger;
+import com.dt.digitaltwinsimulator.logic.SensitiveLogMasker;
 import com.dt.digitaltwinsimulator.mock.MockRouteControl;
 import com.dt.digitaltwinsimulator.realtime.DtMessageFactory;
 import lombok.extern.slf4j.Slf4j;
@@ -211,7 +212,11 @@ final class ScenarioRun implements Runnable {
                             default -> throw new IllegalStateException();
                         }
                         if (!event.type().equals("MARK")) result = "MOCK_OK";
-                    } catch (RuntimeException exception) { result = "MOCK_FAILED"; error = "Mock route operation failed."; }
+                    } catch (RuntimeException exception) {
+                        // 원인을 이벤트 로그에 남겨야 사용자가 시나리오의 어느 route 설정을 고칠지 알 수 있다.
+                        result = "MOCK_FAILED";
+                        error = mockFailureReason(event.routeId(), exception);
+                    }
                     synchronized (lock) {
                         if (result.equals("MOCK_OK")) mockOps++;
                         if (result.equals("MOCK_FAILED")) { failed++; lastError = error; }
@@ -239,6 +244,17 @@ final class ScenarioRun implements Runnable {
             terminated.run();
         }
     }
+    static String mockFailureReason(String routeId, RuntimeException exception) {
+        // REST Mock이 만든 검증 메시지만 원문을 쓴다. 그 밖의 예외 메시지에는 route 본문이 섞일 수 있어 클래스 이름만 남긴다.
+        String type = exception.getClass().getSimpleName();
+        String detail = switch (type) {
+            case "MockNotFoundException" -> "route not found";
+            case "MockInputException" -> exception.getMessage() == null ? type : exception.getMessage();
+            default -> type;
+        };
+        return SensitiveLogMasker.mask("Mock route '" + routeId + "' operation failed: " + detail);
+    }
+
     private void brokerFailure(int backoff) {
         long now = System.nanoTime(); anchor(position(now), now); disconnected = true;
         lastError = "Broker connection or publication failed.";
