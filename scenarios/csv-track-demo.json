@@ -1,0 +1,14 @@
+{
+  "scenarioId": "csv-track-demo",
+  "name": "CSV track with marks",
+  "description": "Run with simulator.files.base-dir=. from the repository root.",
+  "defaults": {"messageId": "LINE1"},
+  "events": [
+    {"at": 0, "type": "MARK", "label": "CSV start"},
+    {"at": 2000, "type": "MARK", "label": "Warning row"},
+    {"at": 3500, "type": "MARK", "label": "CSV complete"}
+  ],
+  "tracks": [
+    {"trackId": "line1", "type": "CSV_TIMELINE", "filePath": "scenarios", "dataFileName": "line1.csv", "formatFileName": "line1_format.txt", "timeColumn": "offsetMs", "timeFormat": "OFFSET_MS", "topicColumn": "topic", "messageIdColumn": "messageId", "topic": "dt.line1", "messageId": "LINE1", "envelope": "DTCORE", "startAt": 0}
+  ]
+}

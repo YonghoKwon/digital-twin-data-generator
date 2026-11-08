@@ -37,6 +37,11 @@ public final class FileDataTemplate {
         return Files.readString(path, StandardCharsets.UTF_8);
     }
 
+    /** Streaming consumers share the legacy CSV/date and placeholder rules. */
+    public String[] parseCsvRow(String line) { return splitCsvLine(stripBom(line).trim()); }
+
+    public List<String> placeholderNames(String template) { return List.copyOf(extractPlaceholderNames(template)); }
+
     public String renderTemplate(String template, String[] data) {
         Matcher matcher = PLACEHOLDER_PATTERN.matcher(template);
         StringBuffer result = new StringBuffer();

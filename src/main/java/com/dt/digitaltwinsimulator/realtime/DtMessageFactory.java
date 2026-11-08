@@ -85,6 +85,19 @@ public class DtMessageFactory {
         return createLiteral(spec, rendered);
     }
 
+    /** Independent candidate state, committed by scenario playback only after a successful send. */
+    public TokenState copyTokenState(TokenState state) { return state.copy(); }
+
+    /** File values are literals: CSV cells must never be interpreted as generation tokens. */
+    public void validateLiteralPayload(Spec spec, JsonNode payload) { validateShape(spec, payload); }
+
+    public Message createLiteralMessage(Spec spec, JsonNode payload) { return createLiteral(spec, payload); }
+
+    /** Isolate stateful fields on different destinations while keeping one run-wide sequence. */
+    public Message createForScope(Spec spec, JsonNode payload, long sequence, TokenState state, String scope) {
+        return createLiteral(spec, visit(payload, scope, sequence, state, false));
+    }
+
     Message createLiteral(Spec spec, JsonNode rendered) {
         var body = rendered;
         if (spec.envelope() == RealtimeRequest.Envelope.DTCORE) {
