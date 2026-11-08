@@ -1,0 +1,3 @@
+"temperature": {{temperature}},
+"status": "{{status}}",
+"note": "{{note}}"
