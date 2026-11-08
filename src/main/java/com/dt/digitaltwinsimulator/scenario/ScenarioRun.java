@@ -100,6 +100,16 @@ final class ScenarioRun implements Runnable {
         synchronized (lock) { if (!state.terminal()) end(STOPPED); lock.notifyAll(); }
         if (worker != null && !finished) worker.interrupt();
     }
+    /** DELETE is idempotent and always returns the contract's STOPPED state, including ended runs. */
+    void stopRequested() {
+        stop();
+        synchronized (lock) {
+            if (state != STOPPED) {
+                state = STOPPED;
+                log.info("scenario changed runId={} state={}", id, state);
+            }
+        }
+    }
     void join(long millis) throws InterruptedException { if (worker != null) worker.join(millis); }
     private void end(ScenarioResponses.State result) {
         long now = System.nanoTime(); anchor(position(now), now); state = result; endedNanos = now;

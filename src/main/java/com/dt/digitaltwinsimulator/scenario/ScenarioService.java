@@ -52,9 +52,9 @@ public class ScenarioService {
     public ScenarioResponses.Status patch(String id, ScenarioResponses.Patch patch) {
         var run = required(id); run.patch(patch); return run.snapshot();
     }
-    public ScenarioResponses.Status stop(String id) { var run = required(id); run.stop(); return run.snapshot(); }
+    public ScenarioResponses.Status stop(String id) { var run = required(id); run.stopRequested(); return run.snapshot(); }
     public List<ScenarioResponses.Status> stopAll() {
-        synchronized (runs) { runs.values().forEach(ScenarioRun::stop); return list(); }
+        synchronized (runs) { runs.values().forEach(ScenarioRun::stopRequested); return list(); }
     }
     public List<ScenarioResponses.EventLog> events(String id, int limit) { return required(id).events(limit); }
     private ScenarioRun required(String id) {

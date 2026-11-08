@@ -840,7 +840,7 @@ S2 토큰, 표준 헤더의 underscore 변환과 JMS header 검증을 그대로 
 `{"seekMs":3000}` 또는 이들의 조합을 지원합니다. 위치는 0..durationMs이며 seek 지점과 같은 at는 재생하고,
 건너간 이벤트는 skipped에 넣지 않습니다. 뒤로 seek하면 Mock 부작용을 되돌리지 않고 이후 이벤트를 다시 처리합니다.
 배속·pause·seek는 현재 위치에 기준 시각을 재설정합니다. 이미 발행 중인 한 건은 완료될 수 있습니다.
-DELETE 단건은 STOPPED 상태, DELETE 목록은 전체 중지 후 상태 배열을 반환합니다.
+DELETE 단건은 종료된 run에도 STOPPED 상태를 반환하며 반복 호출할 수 있습니다. DELETE 목록은 전체 중지 후 상태 배열을 반환합니다.
 종료 run PATCH/실행 중 중복 ID는 409, 최대 동시 수는 429, 없는 파일/run은 404이며
 입력 오류 400을 포함해 오류는 `{error,message}`입니다. 실행 중 브로커 장애는 RECONNECTING으로 처리합니다.
 

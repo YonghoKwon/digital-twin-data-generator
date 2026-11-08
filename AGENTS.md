@@ -481,7 +481,7 @@ TRACE route 등록은 400, TRACE 요청은 405이며 Tomcat TRACE 활성화 설�
   원문 object를 저장/조회하며 PUT 전 검증합니다. validate는 200 `{valid,eventCount,durationMs,topics,errors}`로 오류를 수집합니다.
 - 실행 POST/GET/DELETE `/dt/scenario-runs`, GET/PATCH/DELETE `/dt/scenario-runs/{runId}`,
   GET `/dt/scenario-runs/{runId}/events?limit=50`. POST는 file 또는 inline scenario 중 하나, runId/speed/loop/startAtMs/startPaused 선택, 201입니다.
-  PATCH는 speed(0.1~100)/paused/seekMs(0..durationMs), DELETE 단건은 STOPPED, 전체는 상태 배열입니다.
+  PATCH는 speed(0.1~100)/paused/seekMs(0..durationMs), DELETE 단건은 종료 run/반복 호출에도 STOPPED, 전체는 상태 배열입니다.
   중복/종료 PATCH 409, 동시 한도 429, 없는 파일/run 404, 입력 400, 오류 `{error,message}`입니다.
 - `simulator.scenario.dir=./scenarios`(local `c:/Project/scenarios`), max-runs=10, max-track-rows=1000000.
   라이브러리 파일 경로/외부 symlink 탈출 금지. CSV filePath는 `simulator.files.base-dir` 기준입니다.

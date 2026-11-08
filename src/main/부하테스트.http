@@ -821,7 +821,7 @@ Content-Type: application/json
 ### 전체 run 목록
 GET {{host}}/dt/scenario-runs
 
-### 중지 STOPPED, 종료 run PATCH=409, 없는 run=404, 실행 중 중복 ID=409, 최대 동시 초과=429
+### 중지 STOPPED (종료 run/반복 DELETE도 STOPPED), 종료 run PATCH=409, 없는 run=404, 실행 중 중복 ID=409, 최대 동시 초과=429
 DELETE {{host}}/dt/scenario-runs/control-run
 
 ### 전체 중지 (상태 배열)

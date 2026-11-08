@@ -171,6 +171,13 @@ class ScenarioServiceTest {
         assertThat(service.events("logs", 50)).hasSize(50);
         assertThatThrownBy(() -> service.events("logs", 501)).isInstanceOf(IllegalArgumentException.class);
     }
+    @Test void deletingCompletedRunIsIdempotentAndReturnsStoppedWithCountersPreserved() throws Exception {
+        service.create(request("ended-delete", "", repeat(1, 0))); complete("ended-delete");
+        assertThat(service.stop("ended-delete").state()).isEqualTo(STOPPED);
+        assertThat(service.stop("ended-delete").state()).isEqualTo(STOPPED);
+        assertThat(service.get("ended-delete").sent()).isEqualTo(1);
+        assertThat(service.get("ended-delete").eventsDone()).isEqualTo(1);
+    }
     @Test void retainsLatestFiftyFinishedRunsAndReleasesScopes() throws Exception {
         for (int i = 0; i < 53; i++) {
             String id = "end-" + i; service.create(request(id, "", repeat(1, 0))); complete(id);
