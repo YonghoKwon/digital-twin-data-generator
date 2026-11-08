@@ -4,7 +4,7 @@
 
 ## 프로젝트 요약
 
-이 프로젝트는 Spring Boot 기반 ActiveMQ Artemis 데이터 생성/전송 시뮬레이터입니다.
+이 프로젝트는 Spring Boot 기반 Digital Twin(UE DTCore) 테스트용 데이터 생성/전송·구독·REST Mock 시뮬레이터입니다.
 
 기술 버전: Java 21, Spring Boot 4.1.2, springdoc-openapi 3.2.0, Apache Artemis Jakarta client 2.44.0 (`org.apache.activemq`, 운영 브로커 2.44.0과 동일 버전으로 고정).
 JSON 처리는 Jackson 3 (`tools.jackson.*`)와 Spring이 주입하는 `JsonMapper`를 사용합니다.
@@ -26,6 +26,9 @@ JPA/H2/Postgres, H2 콘솔과 개발용 `/test` API는 제외했습니다. 설�
 - JmsTemplate 부하 테스트 결과 집계(`elapsedMillis`, `actualTps`, `successCount`, `failureCount`)
 - profile별 request/response logging 정책
 - Swagger UI 제공
+- 실시간 단발 전송(`/dt/publish`)과 실행 중 제어 가능한 지속 스트림(`/dt/streams`)
+- 내장 Artemis 2.44.0 브로커(STOMP TCP+WebSocket, 기본 off)와 토픽 구독·SSE(`/dt/broker`, `/dt/subscriptions`)
+- UE DTCore REST API Mock(`/mock/**`, `/mock-admin/**`)
 
 제외한 기능:
 
@@ -112,6 +115,29 @@ GET /dt/streams/{id}
 PATCH /dt/streams/{id}
 DELETE /dt/streams/{id}
 DELETE /dt/streams
+```
+
+내장 브로커·구독 API (Swagger `Embedded Broker`, `Subscriptions`):
+
+```text
+GET /dt/broker
+POST /dt/subscriptions
+GET /dt/subscriptions
+GET /dt/subscriptions/{id}/messages?limit=&afterSeq=&messageId=
+GET /dt/subscriptions/{id}/stream
+DELETE /dt/subscriptions/{id}
+DELETE /dt/subscriptions/{id}/messages
+```
+
+REST Mock API (Swagger `REST Mock Admin`, 서빙 경로 `/mock/**`는 Swagger에서 숨김):
+
+```text
+ANY  /mock/**
+GET/POST /mock-admin/routes, GET/PUT/DELETE /mock-admin/routes/{id}
+PATCH /mock-admin/routes/{id}/enabled, POST /mock-admin/routes/{id}/toggle
+POST /mock-admin/routes/reload, GET /mock-admin/status
+GET/DELETE /mock-admin/requests
+POST /mock-admin/import/dtcore-api-table?overwrite=false
 ```
 
 ## 요청 필드 메모

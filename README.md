@@ -1,6 +1,6 @@
 # Digital Twin Data Generator
 
-REST API 요청으로 특정 포맷의 데이터를 대량 생성한 뒤 ActiveMQ Artemis Topic으로 전송하는 시뮬레이터입니다.
+Digital Twin(UE DTCore) 테스트용 데이터 시뮬레이터입니다. 특정 포맷의 데이터를 생성해 ActiveMQ Artemis Topic으로 단발·지속·대량 전송하고, UE가 보내는 메시지를 구독해 확인하며, UE가 호출할 REST API를 Mock으로 제공합니다. 외부 브로커 없이 쓸 수 있도록 Artemis 2.44.0 내장 브로커(STOMP-WebSocket)도 켤 수 있습니다.
 
 | 주요 API | 기능 |
 | --- | --- |
@@ -9,6 +9,9 @@ REST API 요청으로 특정 포맷의 데이터를 대량 생성한 뒤 ActiveM
 | `POST /activemq/request/jms-template-load/{taskId}` | JmsTemplate 부하 테스트 |
 | `POST /dt/publish`, `POST /dt/publish/preview` | 실시간 단발 전송 / 생성 미리보기 |
 | `POST/GET/DELETE /dt/streams`, `GET/PATCH/DELETE /dt/streams/{id}` | 실시간 스트림 생성·조회·변경·중지 |
+| `GET /dt/broker` | 내장 Artemis 2.44.0 상태, UE `WebSocketUrl` 안내 |
+| `POST/GET /dt/subscriptions`, `GET /dt/subscriptions/{id}/messages`, `GET /dt/subscriptions/{id}/stream` | 토픽 구독(UE가 보낸 메시지 확인), SSE 실시간 보기 |
+| `/mock/**`, `/mock-admin/**` | UE DTCore REST API Mock 서빙과 route·호출 기록 관리 |
 
 ## 실행 환경
 
