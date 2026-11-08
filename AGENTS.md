@@ -297,3 +297,16 @@ task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 남깁니
 - 테스트 실행 방법
 
 변경이 필요 없다고 판단한 경우에도 최종 응답에 세 파일 확인 여부를 명시합니다.
+
+## REST Mock
+
+`com.dt.digitaltwinsimulator.mock` 패키지는 `/mock/**` 서빙과 `/mock-admin` 관리 API를 제공합니다.
+`simulator.mock.base-path`, `routes-dir`, `journal-size`, `max-delay-ms`로 설정하며 route/호출 기록은 메모리에만 저장합니다.
+route 파일은 `mock-routes/*.json`, 가이드는 [docs/rest-mock.md](docs/rest-mock.md), 요청 예시는 [src/main/rest-mock.http](src/main/rest-mock.http)입니다.
+관리 API는 Swagger의 `REST Mock Admin` 태그에 노출하고 실제 서빙 경로는 숨깁니다.
+신규 테스트는 `src/test/java/com/dt/digitaltwinsimulator/mock`에서 RANDOM_PORT/MockMvc로 실행하며 전체 게이트는 기존 `.\mvnw.cmd -B test`입니다.
+시작 route 로드 실패는 ERROR 로그와 `GET /mock-admin/status`에 기록하고 빈 route로 기동하며, 수동 reload 실패는 400과 기존 route/순번 유지를 보장합니다.
+DTCore import는 ApiUrl 앞 `/` 추가·query 제거 후 행별 검증하고 `imported`/`skipped`/`invalid`(id·reason)를 반환합니다.
+매칭은 정확 경로 > `**` 없는 패턴(변수·`*` 적은 순) > `**` 패턴(변수 적은 순) > 등록 순입니다.
+TRACE route 등록은 400, TRACE 요청은 405이며 Tomcat TRACE 활성화 설정을 두지 않습니다.
+등록 후 bodyFile 읽기 실패는 500 `MOCK_BODY_FILE_UNREADABLE`과 routeId를 반환합니다. 렌더/파일 오류 WARN에는 route id·method·path·예외 스택만 남기고 본문·헤더 원문을 넣지 않습니다.
