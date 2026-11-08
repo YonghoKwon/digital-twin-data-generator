@@ -1,8 +1,8 @@
 package com.dt.digitaltwinsimulator.logic;
 
 import com.dt.digitaltwinsimulator.config.ActiveMqBrokerProperties;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -15,9 +15,10 @@ class ActiveMQRequestLogicTest {
     private final ActiveMQRequestLogic logic = new ActiveMQRequestLogic(
             new TaskCancellationLogic(),
             new TaskExecutionStatusLogic(),
-            new ActiveMqBrokerProperties()
+            new ActiveMqBrokerProperties(),
+            JsonMapper.builder().build()
     );
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final JsonMapper objectMapper = JsonMapper.builder().build();
 
     @Test
     void resolveMessageCountUsesExplicitMessageCountFirst() throws Exception {
@@ -60,9 +61,10 @@ class ActiveMQRequestLogicTest {
         String json = invokeCreateStructuredMessage("TC001", Map.of("temperature", "25.5", "status", "OK"));
 
         JsonNode root = objectMapper.readTree(json);
-        assertThat(root.get("CREATE_TIMESTAMP").asText()).matches("\\d{17}");
-        assertThat(root.get("MESSAGE_ID").asText()).isEqualTo("TC001");
-        assertThat(root.get("DATA_MAP").fields()).hasNext();
+        assertThat(root.get("CREATE_TIMESTAMP").asString()).matches("\\d{17}");
+        assertThat(root.get("MESSAGE_ID").asString()).isEqualTo("TC001");
+        assertThat(root.get("DATA_MAP").properties()).isNotEmpty();
+        assertThat(json).startsWith("{" + System.lineSeparator() + "  \"CREATE_TIMESTAMP\" : ");
     }
 
     private int invokeResolveMessageCount(boolean repeatBoolean, int repeatTime, int delayTime, int explicitMessageCount) throws Exception {
