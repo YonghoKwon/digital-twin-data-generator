@@ -140,6 +140,17 @@ GET/DELETE /mock-admin/requests
 POST /mock-admin/import/dtcore-api-table?overwrite=false
 ```
 
+시나리오 API (Swagger `Scenarios`):
+
+```text
+GET /dt/scenarios
+GET/PUT/DELETE /dt/scenarios/{file}
+POST /dt/scenarios/validate
+POST/GET/DELETE /dt/scenario-runs
+GET/PATCH/DELETE /dt/scenario-runs/{runId}
+GET /dt/scenario-runs/{runId}/events?limit=50
+```
+
 ## 요청 필드 메모
 
 일반 format/value 요청의 `typedValues`는 기본 false입니다. true일 때 Integer/Double/Boolean 랜덤값과 value 값을 JSON number/boolean으로 출력합니다.
@@ -462,3 +473,38 @@ DTCore import는 ApiUrl 앞 `/` 추가·query 제거 후 행별 검증하고 `im
 매칭은 정확 경로 > `**` 없는 패턴(변수·`*` 적은 순) > `**` 패턴(변수 적은 순) > 등록 순입니다.
 TRACE route 등록은 400, TRACE 요청은 405이며 Tomcat TRACE 활성화 설정을 두지 않습니다.
 등록 후 bodyFile 읽기 실패는 500 `MOCK_BODY_FILE_UNREADABLE`과 routeId를 반환합니다. 렌더/파일 오류 WARN에는 route id·method·path·예외 스택만 남기고 본문·헤더 원문을 넣지 않습니다.
+
+## 시나리오 재생
+
+- 구현은 `scenario` 패키지와 `controller/ScenarioController`, Swagger 태그 `Scenarios`입니다.
+- 라이브러리 GET `/dt/scenarios`, GET/PUT/DELETE `/dt/scenarios/{file}`, POST `/dt/scenarios/validate`.
+  원문 object를 저장/조회하며 PUT 전 검증합니다. validate는 200 `{valid,eventCount,durationMs,topics,errors}`로 오류를 수집합니다.
+- 실행 POST/GET/DELETE `/dt/scenario-runs`, GET/PATCH/DELETE `/dt/scenario-runs/{runId}`,
+  GET `/dt/scenario-runs/{runId}/events?limit=50`. POST는 file 또는 inline scenario 중 하나, runId/speed/loop/startAtMs/startPaused 선택, 201입니다.
+  PATCH는 speed(0.1~100)/paused/seekMs(0..durationMs), DELETE 단건은 STOPPED, 전체는 상태 배열입니다.
+  중복/종료 PATCH 409, 동시 한도 429, 없는 파일/run 404, 입력 400, 오류 `{error,message}`입니다.
+- `simulator.scenario.dir=./scenarios`(local `c:/Project/scenarios`), max-runs=10, max-track-rows=1000000.
+  라이브러리 파일 경로/외부 symlink 탈출 금지. CSV filePath는 `simulator.files.base-dir` 기준입니다.
+- at는 정수 ms 또는 HH:mm:ss(.SSS), type 기본 PUBLISH, repeat={count>=1,everyMs>=0}.
+  PUBLISH는 S2 defaults/envelope/header/token 의미를 재사용합니다. MARK는 lastMark를 갱신합니다.
+  MOCK_UPDATE는 전체 MockRoute 등록/교체, MOCK_ENABLE/DISABLE은 토글이며 실패 이벤트만 집계하고 계속합니다.
+  `mock.MockRouteControl`의 고립 검증과 얇은 facade로 기존 store 동작을 유지합니다.
+- CSV_TIMELINE은 필수 header/timeColumn, OFFSET_MS/OFFSET_SEC/날짜 패턴(첫 행 기준), startAt,
+  topicColumn/messageIdColumn과 선택 formatFileName을 지원합니다. S1 파서/JSON escape를 공유하고 셀은 리터럴입니다.
+  포맷이 없으면 전체 열의 문자열 object를 사용합니다. 시간/파일 위치 인덱스만 저장하고 전송 시 payload를 읽습니다.
+  정렬된 인라인/repeat/트랙을 지연 병합하며 같은 at는 정의 순서입니다. 트랙 행 한도 초과는 400, 실행 중 파일 변경은 FAILED입니다.
+- run당 가상 스레드/publication scope 한 개. 절대 시각 pacing, 늦으면 생략 없이 따라잡고 최대 lagMs를 노출합니다.
+  speed/pause/seek는 기준 시각 재설정, seek로 건너간 이벤트는 skipped에 포함하지 않습니다. 이미 발행 중 한 건은 완료될 수 있습니다.
+  뒤로 seek는 Mock 변경을 되돌리지 않으며, seq(성공 전송 순번)/walk는 run 전체 상태를 유지합니다.
+  loop 끝에서 loopCount 증가 후 처음부터 재생(0ms loop는 1ms 양보).
+- 브로커 연결은 공통 defaults/factory/publisher와 1·2·4·8·16·30초 백오프를 사용합니다.
+  SKIP은 단절 중 PUBLISH만 skipped, MARK/MOCK 계속. WAIT는 위치/실패 이벤트 유지 후 이어 재생합니다.
+  실패한 시도는 failed, 성공 Mock은 mockOps, 처리 이벤트는 eventsDone에 누적합니다. 일시정지는 재연결도 멈춥니다.
+- 상태 RUNNING/PAUSED/RECONNECTING/COMPLETED/STOPPED/FAILED, progress는 현재 루프 위치/길이,
+  누적 eventsDone/sent/failed/skipped/mockOps/byTopic과 lastMark/lastError/시각을 제공합니다.
+  본문 없는 이벤트 로그는 seq/atMs/type/topic/messageId/result/error, 최근 500개(limit 1~500), 종료 run 최근 50개.
+  시작/변경/종료 INFO, 발행 본문은 MessageBodyLogger, 공급자 상세/자격 정보는 상태에서 제외합니다.
+- 예시 `scenarios/coil-line-demo.json`과 `csv-track-demo.json`(line1.csv/line1_format.txt).
+  저장소 루트에서 CSV 예시는 `--simulator.files.base-dir=.` 필요. local dir/base-dir는 예시 파일 위치에 맞춰 override합니다.
+  README와 src/main/부하테스트.http의 시나리오 블록을 함께 유지합니다.
+- 전체 `.\mvnw.cmd -B test`: 기존 테스트 + at/병합/CSV/2x(400±100ms)/pause/seek/loop/SKIP/WAIT/실제 MOCK HTTP/CRUD/오류/한도/로그/예시 검증.

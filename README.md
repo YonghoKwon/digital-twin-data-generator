@@ -12,6 +12,8 @@ Digital Twin(UE DTCore) 테스트용 데이터 시뮬레이터입니다. 특정 
 | `GET /dt/broker` | 내장 Artemis 2.44.0 상태, UE `WebSocketUrl` 안내 |
 | `POST/GET /dt/subscriptions`, `GET /dt/subscriptions/{id}/messages`, `GET /dt/subscriptions/{id}/stream` | 토픽 구독(UE가 보낸 메시지 확인), SSE 실시간 보기 |
 | `/mock/**`, `/mock-admin/**` | UE DTCore REST API Mock 서빙과 route·호출 기록 관리 |
+| `GET /dt/scenarios`, `GET/PUT/DELETE /dt/scenarios/{file}`, `POST /dt/scenarios/validate` | 시나리오 파일 라이브러리·검증 |
+| `POST/GET/DELETE /dt/scenario-runs`, `GET/PATCH/DELETE /dt/scenario-runs/{runId}`, `GET /dt/scenario-runs/{runId}/events` | 시나리오 재생·제어·진행 상태·이벤트 로그 |
 
 ## 실행 환경
 
@@ -783,3 +785,103 @@ Swagger의 `REST Mock Admin` 태그에서 route CRUD/reload와 DataTable import�
 시작 파일이 잘못되어도 빈 route로 기동하며 `GET /mock-admin/status`에서 route 수와 마지막 로드 결과를 확인합니다. 수동 reload 실패는 400으로 반환하고 기존 route/순번을 유지합니다.
 DTCore import는 ApiUrl 앞 `/`를 보완하고 query를 제거하며 잘못된 행을 `invalid`(id·reason)로 보고합니다. 정확 경로, `**` 없는 패턴, `**` 패턴 순으로 우선 매칭합니다.
 TRACE route 등록은 400, TRACE 요청은 405입니다. 등록 후 bodyFile 읽기 실패는 500 `MOCK_BODY_FILE_UNREADABLE`과 routeId를 반환합니다.
+
+## 시나리오 재생
+
+Swagger `Scenarios`에서 센서·알람·REST Mock 변경을 한 파일로 재생합니다. 예시는
+`scenarios/coil-line-demo.json`(외부 파일 없음)과 `scenarios/csv-track-demo.json`입니다.
+
+```properties
+simulator.scenario.dir=./scenarios
+# local profile: c:/Project/scenarios
+simulator.scenario.max-runs=10
+simulator.scenario.max-track-rows=1000000
+```
+
+라이브러리는 dir 바로 아래 `*.json`만 읽고 저장하며 경로/외부 symlink 탈출을 차단합니다.
+GET 목록은 `{file,scenarioId,name,description,eventCount,trackCount,durationMs,valid,error}` 배열,
+GET 단건은 JSON 원문 object, PUT은 검증 후 원자적 저장과 요약(200), DELETE는 204입니다.
+`POST /dt/scenarios/validate`는 `{valid,eventCount,durationMs,topics,errors}`를 반환합니다.
+유효하지 않은 정의도 HTTP 200으로 여러 오류를 수집하며, 저장과 실행 시에는 400으로 거부합니다.
+JSON 문법 자체가 잘못된 요청은 400입니다. 검증은 발행/Mock route 변경을 하지 않습니다.
+
+```json
+{
+  "scenarioId":"small-demo", "speed":1, "loop":false, "onDisconnect":"SKIP",
+  "defaults":{"topic":"dt.sensor","messageId":"SENSOR","envelope":"DTCORE"},
+  "events":[
+    {"at":0,"payload":{"temperature":"{{walk:25:20..30:0.5}}","seq":"{{seq}}"},"repeat":{"count":3,"everyMs":1000}},
+    {"at":"00:00:02.000","type":"MARK","label":"End"}
+  ]
+}
+```
+
+`at`는 0 이상의 정수 ms 또는 `HH:mm:ss`/`HH:mm:ss.SSS`입니다.
+`repeat={count,everyMs}`는 at부터 count번(1 이상), everyMs 간격(0 이상)으로 반복합니다.
+마지막 at가 `durationMs`이며 eventCount/eventsTotal은 repeat와 트랙 행을 포함합니다.
+PUBLISH의 topic/messageId/envelope/headers/standardHeaders는 이벤트 값, defaults 순으로 적용하고
+나머지는 S2 기본값(DTCORE, standardHeaders=false, 서버 topic)을 사용합니다.
+DTCORE는 messageId와 object payload가 필요하고 RAW는 임의 JSON을 지원합니다.
+S2 토큰, 표준 헤더의 underscore 변환과 JMS header 검증을 그대로 사용합니다.
+`seq`는 run 전체의 성공 전송 순번이며 loop·seek 때에도 계속 증가하고 walk 상태도 유지합니다.
+`MOCK_UPDATE`는 routeId와 일치하는 전체 MockRoute를 등록/교체하고,
+`MOCK_ENABLE`/`MOCK_DISABLE`은 기존 route를 켜고 끕니다. 없는 route의 토글은 해당 이벤트만 실패합니다.
+`MARK`는 lastMark를 변경하며 발행하지 않습니다. MOCK 변경은 실제 메모리 route에 남습니다.
+
+실행은 `POST /dt/scenario-runs`에 다음을 보냅니다(file과 inline scenario 중 정확히 하나).
+
+```json
+{"runId":"demo-1","file":"coil-line-demo.json","speed":5,"loop":false,"startAtMs":0,"startPaused":false}
+```
+
+201로 상태를 반환합니다. `speed` 범위는 0.1~100이고 실행 요청의 speed/loop가 파일 값을 덮어씁니다.
+시나리오 최상위 activeMQIp/id/pw는 공통 브로커 기본값/내장 브로커 선택 규칙을 따릅니다.
+`PATCH /dt/scenario-runs/demo-1`은 `{"speed":2}`, `{"paused":true}`, `{"paused":false}`,
+`{"seekMs":3000}` 또는 이들의 조합을 지원합니다. 위치는 0..durationMs이며 seek 지점과 같은 at는 재생하고,
+건너간 이벤트는 skipped에 넣지 않습니다. 뒤로 seek하면 Mock 부작용을 되돌리지 않고 이후 이벤트를 다시 처리합니다.
+배속·pause·seek는 현재 위치에 기준 시각을 재설정합니다. 이미 발행 중인 한 건은 완료될 수 있습니다.
+DELETE 단건은 STOPPED 상태, DELETE 목록은 전체 중지 후 상태 배열을 반환합니다.
+종료 run PATCH/실행 중 중복 ID는 409, 최대 동시 수는 429, 없는 파일/run은 404이며
+입력 오류 400을 포함해 오류는 `{error,message}`입니다. 실행 중 브로커 장애는 RECONNECTING으로 처리합니다.
+
+상태는 `runId,scenarioId,name,state,speed,loop,positionMs,durationMs,progress,loopCount,eventsTotal,eventsDone,
+sent,failed,skipped,mockOps,byTopic,lastMark,lastError,startedAt,lastEventAt,lagMs`입니다.
+state는 RUNNING/PAUSED/RECONNECTING/COMPLETED/STOPPED/FAILED,
+progress는 현재 루프의 위치/길이(0~1), lagMs는 최대 발행 지연 ms입니다.
+loopCount는 완료 후 되감은 횟수, eventsDone/sent/failed/skipped/mockOps/byTopic은 run 전체 누적입니다.
+failed는 실패한 발행/연결 시도와 Mock 실패, mockOps는 성공한 Mock 이벤트 수입니다.
+`GET /dt/scenario-runs/demo-1/events?limit=50`은 본문 없는
+`{seq,atMs,type,topic,messageId,result,error}` 배열이며 result는 SENT/FAILED/SKIPPED/MOCK_OK/MOCK_FAILED/MARK입니다.
+최근 이벤트 500개(limit 1~500), 종료 run 50개만 메모리에 보관하고 재시작 시 초기화합니다.
+
+run별 가상 스레드와 독립 publication scope 한 개를 사용합니다. 절대 시각 pacing으로 드리프트를 피하고,
+늦으면 순서대로 따라잡으며 이벤트를 생략하지 않습니다. 동시 at는 정의 순서(인라인 다음 트랙/행 순서)로 처리합니다.
+repeat와 트랙을 이터레이터로 병합합니다. loop는 마지막 처리 뒤 처음부터 시작하며 길이 0인 루프는 1ms 양보합니다.
+브로커 재연결은 S2와 같은 1·2·4·8·16·30초 백오프입니다.
+SKIP은 실패한 발행을 failed로 집계하고 단절 중 도래한 PUBLISH만 skipped로 집계하며 MARK/MOCK는 계속합니다.
+WAIT는 실패 이벤트와 위치를 유지하고 재연결 후 같은 이벤트부터 이어갑니다. 성공 전까지 seq/walk는 확정하지 않습니다.
+일시정지는 재연결 시도도 멈춥니다. 공급자 오류/자격 정보는 상태에 노출하지 않으며 본문 로그는 MessageBodyLogger를 사용합니다.
+
+CSV_TIMELINE 트랙에는 trackId/type/filePath/dataFileName/timeColumn을 지정합니다.
+첫 유효 행은 고유한 열 이름의 header이고, 시간은 OFFSET_MS(기본), OFFSET_SEC(소수 초 가능), 날짜 패턴을 지원합니다.
+날짜 패턴은 첫 데이터 행 기준 상대 시각이며 startAt(기본 0)을 더합니다. 값은 음수가 될 수 없습니다.
+행의 topicColumn/messageIdColumn을 선택할 수 있고 없으면 트랙 값/defaults를 사용합니다.
+formatFileName을 주면 S1 FILE_DATA placeholder/header/quoted CSV/날짜 정규화/JSON escape로 payload를 만들고,
+생략하면 모든 CSV 열을 문자열 값으로 가진 object를 만듭니다. 파일 값의 생성 토큰은 리터럴로 유지합니다.
+트랙 파일은 기존 simulator.files.base-dir 제한을 따릅니다. 전체 CSV payload를 적재하지 않고
+시간/파일 위치 인덱스만 정렬하며, 행은 전송 시 읽습니다. 트랙마다 최대 max-track-rows(기본 1,000,000)를 넘으면 400입니다.
+실행 중 파일 변경은 FAILED를 일으키므로 새 run으로 다시 검증합니다.
+
+저장소 루트에서 CSV 예시를 실행하려면 `--simulator.files.base-dir=.`을 지정합니다.
+기본 라이브러리 `./scenarios`와 트랙 filePath=`scenarios`가 모두 저장소의 scenarios를 가리킵니다.
+local profile에서는 기본 라이브러리 `c:/Project/scenarios`로 예시를 복사하거나 dir을 override하고,
+트랙이 실제 저장된 위치에 맞춰 base-dir도 지정해야 합니다.
+
+```powershell
+.\mvnw.cmd -B package
+java -jar target/digital-twin-simulator-0.0.1-SNAPSHOT.jar --simulator.embedded-broker.enabled=true --simulator.files.base-dir=.
+```
+
+`src/main/부하테스트.http`의 시나리오 블록은 구독 → validate → 실행 → 상태/메시지/REST 확인 순서입니다.
+전체 게이트는 기존 `.\mvnw.cmd -B test`입니다. 신규 테스트는 RANDOM_PORT/MockMvc와 fake publisher를 쓰며,
+2x 타이밍은 시나리오 800ms를 실제 400ms ±100ms로 검증합니다. Windows symlink 권한이 없으면 해당 검사만 skip합니다.

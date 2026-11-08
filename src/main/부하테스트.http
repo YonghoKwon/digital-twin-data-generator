@@ -729,3 +729,106 @@ DELETE {{host}}/dt/streams/sensor-1
 
 ### 전체 중지
 DELETE {{host}}/dt/streams
+
+### ============================================================================
+### 시나리오 재생 (Swagger: Scenarios)
+### simulator.scenario.dir=./scenarios (local: c:/Project/scenarios)
+### max-runs=10, max-track-rows=1000000, 종료 run 50개/이벤트 로그 500개 보관
+### 내장 브로커를 enabled=true로 실행하면 외부 broker 없이 아래 구독/발행 가능.
+### CSV 예시: 저장소 루트에서 --simulator.files.base-dir=. 설정 필요.
+### 트랙 filePath=scenarios는 base-dir/scenarios를 의미하며 라이브러리 dir과 별도임.
+### ============================================================================
+
+### 시나리오 라이브러리 목록 (요약 배열)
+GET {{host}}/dt/scenarios
+
+### 원문 JSON object
+GET {{host}}/dt/scenarios/coil-line-demo.json
+
+### 외부 파일 없는 예시 검증 (invalid도 200, valid=false + errors)
+POST {{host}}/dt/scenarios/validate
+Content-Type: application/json
+
+< ../../scenarios/coil-line-demo.json
+
+### CSV 트랙 예시 검증 (base-dir=. 필요)
+POST {{host}}/dt/scenarios/validate
+Content-Type: application/json
+
+< ../../scenarios/csv-track-demo.json
+
+### 인라인 시나리오 검증·저장 (PUT 200 + 요약)
+PUT {{host}}/dt/scenarios/http-demo.json
+Content-Type: application/json
+
+{"scenarioId":"http-demo","defaults":{"topic":"dt.coil.sensor","messageId":"SENSOR"},"events":[{"at":0,"payload":{"seq":"{{seq}}"},"repeat":{"count":3,"everyMs":1000}},{"at":"00:00:02.000","type":"MARK","label":"done"}]}
+
+### 먼저 coil 센서/알람 구독
+POST {{host}}/dt/subscriptions
+Content-Type: application/json
+
+{"subscriptionId":"scenario-coil","topic":"dt.coil.#","bufferSize":1000}
+
+### 파일 실행 201 (file/inline scenario 중 하나, speed 0.1~100)
+POST {{host}}/dt/scenario-runs
+Content-Type: application/json
+
+{"runId":"coil-run","file":"coil-line-demo.json","speed":5,"loop":false,"startAtMs":0,"startPaused":false}
+
+### 상태: progress 증가 후 COMPLETED, sent=12/mockOps=5/lastMark=Demo complete
+### eventsTotal=20, eventsDone=20, failed/skipped=0
+GET {{host}}/dt/scenario-runs/coil-run
+
+### 수신 메시지 (seq 오름차순)
+GET {{host}}/dt/subscriptions/scenario-coil/messages?limit=100
+
+### MOCK_UPDATE 후 실제 응답 {"status":"COMPLETED"}
+GET {{host}}/mock/coil/status
+
+### 본문 없는 이벤트 로그 (SENT/FAILED/SKIPPED/MOCK_OK/MOCK_FAILED/MARK), limit=1~500
+GET {{host}}/dt/scenario-runs/coil-run/events?limit=50
+
+### CSV 트랙 실행 (base-dir=. 필요)
+POST {{host}}/dt/scenario-runs
+Content-Type: application/json
+
+{"runId":"csv-run","file":"csv-track-demo.json","speed":2}
+
+### 제어 연습: 시작 시 pause하고 loop 실행
+POST {{host}}/dt/scenario-runs
+Content-Type: application/json
+
+{"runId":"control-run","file":"coil-line-demo.json","startPaused":true,"loop":true}
+
+### 배속·seek·resume 한 번에 적용, seek 사이 이벤트는 skipped에 넣지 않음
+PATCH {{host}}/dt/scenario-runs/control-run
+Content-Type: application/json
+
+{"speed":2,"seekMs":3000,"paused":false}
+
+### 일시정지 (위치 동결)
+PATCH {{host}}/dt/scenario-runs/control-run
+Content-Type: application/json
+
+{"paused":true}
+
+### 재개
+PATCH {{host}}/dt/scenario-runs/control-run
+Content-Type: application/json
+
+{"paused":false}
+
+### 전체 run 목록
+GET {{host}}/dt/scenario-runs
+
+### 중지 STOPPED, 종료 run PATCH=409, 없는 run=404, 실행 중 중복 ID=409, 최대 동시 초과=429
+DELETE {{host}}/dt/scenario-runs/control-run
+
+### 전체 중지 (상태 배열)
+DELETE {{host}}/dt/scenario-runs
+
+### 예제에서 저장한 파일 삭제 204
+DELETE {{host}}/dt/scenarios/http-demo.json
+
+### 구독 정리
+DELETE {{host}}/dt/subscriptions/scenario-coil
