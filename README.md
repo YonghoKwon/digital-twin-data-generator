@@ -33,6 +33,22 @@ DB 기능은 제외하며 JPA/H2/Postgres 의존성과 H2 콘솔, 개발용 `/te
 - http://localhost:8080/swagger
 - http://localhost:8080/swagger-ui/index.html
 
+## 웹 UI
+
+서버 실행 후 **http://localhost:8080/ui/** 를 엽니다. `/`는 `/ui/`로 이동하며 `/swagger`는 유지합니다.
+
+- 대시보드: 내장 브로커·WebSocketUrl·UE DTCoreSettings, 스트림·구독·시나리오 run·기존 task 요약, REST Mock 상태를 3초마다 갱신합니다.
+- 단발 전송: JSON 문법 검사·토큰 예시·헤더 편집·미리보기·실제 전송 및 최근 요청 10개 복원을 지원합니다. 최근 요청은 이 브라우저의 localStorage에만 저장하며 브로커 연결 정보 및 민감한 이름의 필드는 제거합니다.
+- 스트림: JSON/FILE_DATA 생성, 1초 상태 갱신, 속도 변경·일시정지·재개·중지·Payload 교체를 지원합니다.
+- 구독 모니터: wildcard 구독을 만들고 목록에서 선택하면 SSE 메시지를 표시합니다. overflow/재연결 시 `afterSeq`로 자동 복구하며, 서버 버퍼에서 이미 제거된 구간은 경고합니다. 화면은 최대 500건을 보관하고 화면 일시정지 중에도 수신은 계속합니다. JSON·properties·BINARY Base64 미리보기를 확인할 수 있습니다.
+- REST Mock: route CRUD·enabled 토글·파일 reload·DataTable import 및 호출 기록 상세를 지원합니다. 메모리 변경 사항은 reload 시 파일 내용으로 대체됩니다. route 실행 seq는 현재 조회 API에 없어 `미제공`으로 표시합니다.
+- 시나리오: 라이브러리(유효성 VALID/INVALID)·검증·저장·실행·배속·탐색·이벤트 로그 화면을 제공합니다. 반복 재생 중에는 events를 run 전체 누적값으로 표시합니다. S5 API가 404인 서버는 `시나리오 기능이 아직 없는 서버` 안내를 표시하며 다른 메뉴는 정상 동작합니다.
+- 기존 기능: task 조회·취소, dry-run 3종과 기존 전송, JmsTemplate 부하 테스트 및 Swagger 링크를 제공합니다.
+
+외부 CDN·npm·추가 빌드 없이 HTML/CSS/JavaScript ES modules를 같은 서버에서 제공합니다. 정적 파일은 `spring.web.resources.cache.cachecontrol.no-cache=true`로 매번 재검증하므로 서버 업데이트 후 새로고침하면 새 화면이 적용됩니다. 시스템 테마와 라이트/다크 전환을 지원합니다. 탭을 바꾸면 해당 화면의 polling/SSE/진행 중 HTTP 대기를 정리하고 브라우저가 숨겨진 동안 polling을 멈춥니다. 서버에서 시작한 전송 작업은 메뉴 이동만으로 중지되지 않으므로 관리 화면에서 중지/취소하세요.
+
+UI 서빙 회귀 테스트는 기존 `./mvnw -B test`에 포함됩니다. Node 22가 있으면 추가로 `node --experimental-default-type=module --test src/test/ui/ui.test.mjs`를 실행할 수 있습니다.
+
 ## 실행
 
 기본 실행:
@@ -40,6 +56,8 @@ DB 기능은 제외하며 JPA/H2/Postgres 의존성과 H2 콘솔, 개발용 `/te
 ```bash
 mvn spring-boot:run
 ```
+
+실행 후 웹 운영 화면: http://localhost:8080/ui/
 
 local profile 실행:
 

@@ -37,6 +37,8 @@ JPA/H2/Postgres, H2 콘솔과 개발용 `/test` API는 제외했습니다. 설�
 
 ## 실행
 
+서버 실행 후 웹 운영 화면: http://localhost:8080/ui/ (`/` → `/ui/`, Swagger는 `/swagger` 유지).
+
 기본 실행:
 
 ```bash
@@ -71,6 +73,17 @@ http://localhost:8080/swagger-ui/index.html
 Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용하며, 설치된 Maven의 `mvn test`도 가능합니다.
 외부 Artemis 브로커 없이 기존 테스트와 dry-run JSON object 계약 테스트를 실행합니다.
 CI도 Java 21 기준으로 `mvn -B test`를 실행합니다.
+
+## 웹 UI
+
+- `/ui/`는 한국어 운영 SPA이며 `#/dashboard`, `#/publish`, `#/streams`, `#/subscriptions`, `#/mock`, `#/scenarios`, `#/legacy`로 이동합니다.
+- 구현 범위는 `src/main/resources/static/ui/**`, `controller/UiController` 및 루트 redirect입니다. 기존 API·브로커 로직은 재사용합니다. 빌드 도구·외부 CDN·라이브러리 없이 ES modules를 사용합니다.
+- 대시보드 3초, 스트림/run 1초, 구독 목록·Mock 기록·기존 task 3초 polling을 사용합니다. 화면 전환 시 요청·polling·SSE를 정리하며 숨겨진 브라우저에서는 polling을 멈춥니다.
+- 구독을 선택하면 SSE를 연결하고 overflow/재연결 시 마지막 seq 이후 기록을 REST로 이어받아 중복 없이 병합합니다. 화면 최대 500건, 화면 일시정지 중에도 수신 유지, 서버 버퍼에서 제거된 구간은 경고합니다.
+- 최근 단발 요청 10개는 localStorage에 저장하며 브로커 연결 정보와 `pw` 및 password/token/authorization 등 민감한 이름의 필드를 재귀 제거합니다(JSON 문자열 내부도 처리). 비밀번호 입력은 password이며 다른 입력·서버 응답은 DOM textContent/text node로 렌더링합니다.
+- 시나리오 화면은 전달된 S5 API 계약을 따르며 404면 기능 미탑재 안내를 표시합니다. REST Mock 실행 seq는 API 미제공으로 표시합니다. 부하 테스트 등 서버 작업은 메뉴 이동 후에도 별도로 취소해야 합니다.
+- 정적 파일은 `spring.web.resources.cache.cachecontrol.no-cache=true`로 매 요청 재검증합니다(업데이트 후 이전 JS 모듈이 남지 않게). 시나리오 라이브러리 유효성은 VALID/INVALID, 반복 재생 중 events는 누적값으로 표시합니다.
+- `ui/UiServingTest`가 root·Swagger redirect, `/ui/` HTML, 모든 JS/CSS content-type과 no-cache 헤더를 확인합니다. 선택 Node 검증: `node --experimental-default-type=module --test src/test/ui/ui.test.mjs` (Node 22, 추가 패키지 없음).
 
 ## 주요 API
 
