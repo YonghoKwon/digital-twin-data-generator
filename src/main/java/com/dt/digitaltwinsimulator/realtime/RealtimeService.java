@@ -41,13 +41,13 @@ public class RealtimeService {
         var spec = validatePublish(request, false);
         var broker = broker(request);
         var tokens = new DtMessageFactory.TokenState();
-        // Generate every message before broker I/O so a later token failure is still a 400
-        // with no publication side effects, rather than being mistaken for a broker error.
-        List<DtMessageFactory.Message> messages = new ArrayList<>();
+        // Dry-generate every message on a token copy before broker I/O so a later token failure is still a 400
+        // with no publication side effects. Real messages are generated at send time so now/dx_sent_at follow intervalMs.
+        var dryTokens = tokens.copy();
         for (int i = 1; i <= request.getCount(); i++) {
-            messages.add(factory.create(spec, request.getPayload(), i, tokens));
+            factory.create(spec, request.getPayload(), i, dryTokens);
         }
-        var first = messages.getFirst();
+        var first = factory.create(spec, request.getPayload(), 1, tokens);
         long started = System.nanoTime();
         long sent = 0;
         // Probe validates endpoint/authentication using the common timeout policy.
@@ -55,7 +55,7 @@ public class RealtimeService {
         try (var publication = publisher.open(broker)) {
             for (int i = 0; i < request.getCount(); i++) {
                 if (i > 0 && request.getIntervalMs() > 0) Thread.sleep(request.getIntervalMs());
-                var message = messages.get(i);
+                var message = i == 0 ? first : factory.create(spec, request.getPayload(), i + 1L, tokens);
                 publication.publish(broker.topic(), message.body(), message.headers());
                 bodyLogger.logMessage("dt-publish", ++sent, message.body());
             }

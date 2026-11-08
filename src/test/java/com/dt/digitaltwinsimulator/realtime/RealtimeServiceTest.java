@@ -69,6 +69,20 @@ class RealtimeServiceTest {
     }
 
     @Test
+    void publishGeneratesTimestampsAtSendTimeAcrossIntervals() {
+        var request = request("timed");
+        request.setPayload(mapper.readTree("{\"at\":\"{{now:HH:mm:ss.SSS}}\",\"n\":\"{{seq}}\"}"));
+        request.setCount(2);
+        request.setIntervalMs(60);
+        service.publish(request);
+        assertThat(publisher.bodies).hasSize(2);
+        var first = mapper.readTree(publisher.bodies.get(0)).get("CREATE_TIMESTAMP").asString();
+        var second = mapper.readTree(publisher.bodies.get(1)).get("CREATE_TIMESTAMP").asString();
+        // 메시지를 미리 만들어 두면 두 시각이 같아진다. 전송 시점 생성이면 intervalMs만큼 벌어진다.
+        assertThat(Long.parseLong(second) - Long.parseLong(first)).isGreaterThanOrEqualTo(50);
+    }
+
+    @Test
     void previewHasNoBrokerSideEffectsAndEnforcesTen() {
         var request = request("preview");
         request.setCount(10);
