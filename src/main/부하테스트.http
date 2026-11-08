@@ -24,7 +24,7 @@
 ###   filePath="."는 base-dir, 외부 경로/다른 드라이브/외부 symlink는 400입니다.
 ### - 비동기 전송은 요청 스레드에서 dry-run 1건 + broker connect/start/close를 먼저 확인합니다.
 ###   simulator.activemq.connect-timeout-ms=3000 (callTimeout/callFailoverTimeout/connect-timeout-millis, 재시도 0)
-### - 오류 JSON: {"error":"INVALID_REQUEST","message":"Invalid input or file content."}
+### - 오류 JSON: {"error":"INVALID_REQUEST","message":"<검증 실패 원인>"}
 ###   400 INVALID_REQUEST / 502 BROKER_CONNECTION_FAILED / 409 DUPLICATE_TASK_ID (실행 중인 load taskId)
 ### - 성공 문자열, dry-run messages object, LoadTestResultDto 구조는 유지합니다.
 ### - 일반 format/value의 typedValues=false(기본)는 문자열, true는 Integer/Double/Boolean을 number/boolean으로 출력합니다.
