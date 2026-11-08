@@ -101,6 +101,19 @@ POST /activemq/task/cancel-tasks
 POST /activemq/task/cancel-task/{taskId}
 ```
 
+실시간 API (Swagger `Realtime`):
+
+```text
+POST /dt/publish
+POST /dt/publish/preview
+POST /dt/streams
+GET /dt/streams
+GET /dt/streams/{id}
+PATCH /dt/streams/{id}
+DELETE /dt/streams/{id}
+DELETE /dt/streams
+```
+
 ## 요청 필드 메모
 
 일반 format/value 요청의 `typedValues`는 기본 false입니다. true일 때 Integer/Double/Boolean 랜덤값과 value 값을 JSON number/boolean으로 출력합니다.
@@ -297,3 +310,61 @@ task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 남깁니
 - 테스트 실행 방법
 
 변경이 필요 없다고 판단한 경우에도 최종 응답에 세 파일 확인 여부를 명시합니다.
+
+## 실시간 전송
+
+`realtime` 패키지와 `controller/RealtimeController`에서 공통 브로커 계층을 재사용합니다. 스트림 상태는 메모리에만 보관하며 앱 종료 시 모두 정리합니다.
+`POST /dt/publish`는 동기 전송이며 `count=1`, `intervalMs=0`이 기본입니다. 결과는 `{sent,failed,elapsedMillis,topic,firstMessage}`이며 브로커 오류는 502입니다.
+`POST /dt/publish/preview`는 브로커에 연결하지 않고 `{count,topic,messages:[object...]}`를 반환합니다. count는 1~10입니다.
+
+기본 `envelope=DTCORE`는 object payload와 messageId를 요구하며 `CREATE_TIMESTAMP`와 `DATA_MAP` 키에 같은 `yyyyMMddHHmmssSSS` 시각을 넣습니다.
+`RAW`는 임의 JSON을 그대로 직렬화하며 문자열 payload는 따옴표 없는 문자열 본문으로 전송합니다.
+`standardHeaders=true`이면 UUID·UTC ISO-8601·schema version을 JMS string property에 넣습니다.
+Artemis 2.44.0 클라이언트가 하이픈 property를 거부하므로 예비안을 적용합니다:
+`dx-schema-version → dx_schema_version`, `dx-message-id → dx_message_id`, `dx-sent-at → dx_sent_at`.
+사용자 headers에서도 이 세 이름만 변환하며 나머지는 JMS Java 식별자 규칙(예약어/JMS 접두사 제외)을 검증합니다. 표준 헤더 덮어쓰기와 변환 후 충돌은 400입니다.
+
+```properties
+simulator.realtime.schema-version=1
+simulator.realtime.max-publish-count=1000
+simulator.realtime.max-rate-tps=5000
+simulator.realtime.max-streams=50
+```
+
+문자열 값 전체가 토큰이면 타입을 유지하며 객체·배열에 재귀 적용합니다. 일부 토큰은 문자열 치환입니다.
+`{{seq}}`, `{{now}}`, `{{now:yyyy-MM-dd'T'HH:mm:ss}}`, `{{uuid}}`, `{{random:Integer:1..10}}`,
+`{{random:Double:1..2}}`, `{{random:Boolean:}}`, `{{walk:20:10..30:0.5}}`, `{{cycle:OK|WARN}}`, `{{pick:A|B}}`를 지원합니다.
+random 조건은 기존 `RandomValueGenerator` 문법이며 잘못된/알 수 없는 토큰은 요청 시 400입니다.
+seq는 성공 전송 기준 1부터, cycle은 seq 기준, walk는 각 필드별 초기값에서 시작하고 지정 범위와 최대 변화량을 지킵니다.
+
+단발 예시 (`POST /dt/publish`):
+
+```json
+{"topic":"topic.sensor","messageId":"SENSOR","payload":{"temperature":23.5},"standardHeaders":true}
+```
+
+센서 스트림 (`POST /dt/streams`, 기본 durationSec/maxMessages=0은 무한):
+
+```json
+{"streamId":"sensor-1","topic":"topic.sensor","messageId":"SENSOR","rateTps":1,"payload":{"seq":"{{seq}}","temperature":"{{walk:20:10..30:0.5}}"}}
+```
+
+`PATCH /dt/streams/sensor-1`에 `{"rateTps":10}`, `{"paused":true}`, `{"paused":false}`를 보내 속도 변경·일시정지·재개합니다.
+payload 교체도 가능하며 다음 메시지부터 적용하고 walk 상태를 초기화합니다. 진행 중인 발행 한 건은 완료될 수 있습니다.
+FILE_DATA 스트림은 payload 대신 다음 source를 사용합니다:
+
+```json
+{"streamId":"file-1","messageId":"SENSOR","rateTps":1,"source":{"type":"FILE_DATA","filePath":".","formatFileName":"format.txt","dataFileName":"data.csv","loop":true}}
+```
+
+기존 header/순서/quoted CSV·날짜 정규화·JSON escape·base-dir/실제 경로 제한을 따릅니다. 행을 순서대로 보내고 loop=false이면 마지막 행에서 COMPLETED입니다.
+기존 private 파일 로직은 변경하지 않고 realtime 어댑터와 S1 비교 테스트로 계약을 유지합니다. 파일은 생성 요청 시 읽고 검증하며 PATCH payload는 파일 소스를 단일 payload 반복으로 교체합니다.
+파일 행의 값은 리터럴로 유지하여 값 생성 토큰을 확장하지 않으며 기존 EAI 부가 필드 대신 실시간 envelope를 사용합니다.
+
+스트림별 가상 스레드 한 개와 독립 발행 scope를 사용합니다. 첫 발행은 즉시이며 절대 시각 pacing으로 지연 누적을 피하고 밀림 시 따라잡기 없이 기준을 재설정해 lagResets를 증가시킵니다.
+rateTps는 양의 실수(예: 0.2), durationSec는 일시정지/재연결을 포함한 경과 초, maxMessages는 성공 전송 수 기준입니다.
+상태는 RUNNING/PAUSED/RECONNECTING/COMPLETED/STOPPED/FAILED이며 중복 실행 id는 409, 최대 동시 수 초과는 429, 없는 id는 404입니다.
+브로커 오류는 1·2·4·8·16·30초 백오프로 재연결합니다. failed는 실제 실패 시도 수, skippedWhileDisconnected는 연결 단절 동안 생략한 예약 수(일시정지 제외)입니다.
+actualTps는 최근 10초 성공 수/관측 시간(시작 후 10초 미만이면 경과 시간)이며 lastError는 자격 정보와 공급자 상세 문자열을 노출하지 않습니다.
+종료 상태는 최근 100개만 남기며 DELETE는 STOPPED 상태를 반환합니다. 네트워크 작업이 이미 진행 중이면 scope 정리는 공통 브로커 timeout 이내에 이어집니다.
+테스트는 fake publisher로 시간·순서·재연결을 검증하며 100 TPS × 2초의 합격 범위는 180~220건입니다. 실제 STOMP 헤더 수신은 S4 검증 범위입니다.

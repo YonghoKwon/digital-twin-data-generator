@@ -513,3 +513,120 @@ Content-Type: application/json
   "filePath": "..",
   "fileName": "outside.json"
 }
+
+### ============================================================================
+### 실시간 전송 (Realtime)
+### POST /dt/publish, POST /dt/publish/preview
+### POST/GET/DELETE /dt/streams, GET/PATCH/DELETE /dt/streams/{id}
+### standardHeaders: dx-schema-version -> dx_schema_version,
+### dx-message-id -> dx_message_id, dx-sent-at -> dx_sent_at (Artemis JMS 제약 예비안)
+### rateTps > 0, durationSec/maxMessages=0 무한, actualTps 최근 10초 이동 평균
+### 400 INVALID_REQUEST / 502 BROKER_CONNECTION_FAILED / 409 DUPLICATE_TASK_ID
+### 429 STREAM_LIMIT_EXCEEDED / 404 STREAM_NOT_FOUND / 409 STREAM_NOT_ACTIVE
+### ============================================================================
+
+### 단발 1건 (동기 결과 sent/failed/elapsedMillis/topic/firstMessage)
+POST {{host}}/dt/publish
+Content-Type: application/json
+
+{
+  "topic": "{{topic}}",
+  "messageId": "{{tcName}}",
+  "payload": {"temperature":23.5,"status":"OK"},
+  "headers": {"traceId":"manual-test"},
+  "standardHeaders": true
+}
+
+### N건 순서 전송 (count 기본 1, 최대 1000 / intervalMs 기본 0)
+POST {{host}}/dt/publish
+Content-Type: application/json
+
+{"topic":"{{topic}}","messageId":"{{tcName}}","count":3,"intervalMs":100,"payload":{"temperature":23.5}}
+
+### 브로커 없이 preview (count 최대 10, messages는 JSON object)
+POST {{host}}/dt/publish/preview
+Content-Type: application/json
+
+{"messageId":"{{tcName}}","count":2,"payload":{"temperature":23.5,"status":"OK"}}
+
+### RAW는 임의 JSON 또는 문자열 (문자열은 따옴표 없는 본문으로 전송)
+POST {{host}}/dt/publish/preview
+Content-Type: application/json
+
+{"envelope":"RAW","payload":[1,true,{"temperature":23.5}]}
+
+### 센서처럼 1초마다 walk 값 전송 (멈출 때까지)
+### 토큰 문법: seq / now / now:패턴 / uuid / random:Integer:1..10 /
+### random:Double:1..2 / random:Boolean: / walk:20:10..30:0.5 / cycle:OK|WARN / pick:A|B
+### HTTP 클라이언트의 {{...}} 변수 치환과 충돌하지 않도록 아래 JS에서 토큰 문자열을 만듭니다.
+< {%
+    const token = text => '{' + '{' + text + '}' + '}';
+    request.variables.set('realtimeSensorPayload', JSON.stringify({
+        seq: token('seq'), temperature: token('walk:20:10..30:0.5'), status: token('cycle:OK|OK|WARN')
+    }));
+%}
+POST {{host}}/dt/streams
+Content-Type: application/json
+
+{
+  "streamId":"sensor-1","topic":"{{topic}}","messageId":"{{tcName}}",
+  "standardHeaders":true,"rateTps":1,"durationSec":0,"maxMessages":0,"startPaused":false,
+  "payload":{{realtimeSensorPayload}}
+}
+
+### 전체 / 개별 상태 (sent, failed, actualTps, lastError, lagResets, skippedWhileDisconnected)
+GET {{host}}/dt/streams
+
+###
+GET {{host}}/dt/streams/sensor-1
+
+### 즉시 속도 변경 (다음 메시지부터 적용, rateTps=0.2이면 5초 간격)
+PATCH {{host}}/dt/streams/sensor-1
+Content-Type: application/json
+
+{"rateTps":10}
+
+### 일시정지
+PATCH {{host}}/dt/streams/sensor-1
+Content-Type: application/json
+
+{"paused":true}
+
+### 재개 + payload 교체 (진행 중인 발행 1건은 완료될 수 있음)
+PATCH {{host}}/dt/streams/sensor-1
+Content-Type: application/json
+
+{"paused":false,"payload":{"temperature":25.0,"status":"UPDATED"}}
+
+### FILE_DATA 스트림 (기존 파일 규칙, loop=false이면 마지막 행 후 COMPLETED)
+POST {{host}}/dt/streams
+Content-Type: application/json
+
+{
+  "streamId":"file-1","topic":"{{topic}}","messageId":"{{tcName}}","rateTps":1,
+  "source":{"type":"FILE_DATA","filePath":"{{filePath}}","formatFileName":"{{formatFileName}}","dataFileName":"{{dataFileName}}","loop":true}
+}
+
+### 지정 시간/건수 자동 종료 (먼저 도달하는 조건)
+POST {{host}}/dt/streams
+Content-Type: application/json
+
+{"streamId":"bounded-1","messageId":"{{tcName}}","rateTps":100,"durationSec":2,"maxMessages":200,"payload":{"temperature":20}}
+
+### 브로커 없이 확인: preview 200 / publish 502 / stream RECONNECTING
+POST {{host}}/dt/publish
+Content-Type: application/json
+
+{"activeMQIp":"tcp://127.0.0.1:1","messageId":"{{tcName}}","payload":{"temperature":20}}
+
+###
+POST {{host}}/dt/streams
+Content-Type: application/json
+
+{"streamId":"reconnect-1","activeMQIp":"tcp://127.0.0.1:1","messageId":"{{tcName}}","rateTps":1,"payload":{"temperature":20}}
+
+### 개별 중지 (STOPPED 상태 유지)
+DELETE {{host}}/dt/streams/sensor-1
+
+### 전체 중지
+DELETE {{host}}/dt/streams
