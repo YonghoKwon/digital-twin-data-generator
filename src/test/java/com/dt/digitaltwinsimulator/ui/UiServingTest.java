@@ -46,7 +46,8 @@ class UiServingTest {
     @Test
     void cssAndEveryJavascriptModuleAreServedWithCorrectMediaTypes() throws Exception {
         mvc.perform(get("/ui/styles.css")).andExpect(status().isOk())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.valueOf("text/css")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.valueOf("text/css")))
+                .andExpect(header().string("Cache-Control", containsString("no-cache")));
         var modules = new PathMatchingResourcePatternResolver().getResources("classpath*:/static/ui/**/*.js");
         assertThat(modules.length).isGreaterThanOrEqualTo(12);
         for (var module : modules) {
@@ -57,7 +58,19 @@ class UiServingTest {
             // 업데이트 후 브라우저가 이전 모듈을 쓰지 않도록 매번 재검증해야 한다.
             assertThat(response.getHeader("Cache-Control")).contains("no-cache");
             String source = module.getContentAsString(StandardCharsets.UTF_8);
-            assertThat(source).doesNotContain("innerHTML", "https://cdn.", "http://cdn.");
+            assertThat(source).doesNotContain("innerHTML", "https://cdn.", "http://cdn.", "SIMULATOR / CONTROL CENTER", "eyebrow", "→", " · ");
         }
+    }
+
+    @Test
+    void hmiShellProvidesStatusStripNavigationAndLocalAutocomplete() throws Exception {
+        mvc.perform(get("/ui/"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("class=\"status-strip\"")))
+                .andExpect(content().string(containsString("id=\"plant-status\"")))
+                .andExpect(content().string(containsString("id=\"stop-all\"")))
+                .andExpect(content().string(containsString("id=\"commands\"")))
+                .andExpect(content().string(containsString("id=\"known-topics\"")))
+                .andExpect(content().string(containsString("id=\"known-message-ids\"")));
     }
 }
