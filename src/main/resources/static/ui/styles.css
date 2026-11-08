@@ -121,3 +121,9 @@ dialog::backdrop { background:rgb(0 0 0 / 35%); }
 }
 @media (max-width:560px) { .form-grid { grid-template-columns:1fr; } .page-head { align-items:start; flex-wrap:wrap; } }
 @media (prefers-reduced-motion:reduce) { * { animation:none !important; scroll-behavior:auto !important; } }
+.tag-name { font-size:24px; color:var(--ink); padding:0; border:0; }
+.help,.muted,.editor-status,.empty,.key,th { color:color-mix(in srgb,var(--dim) 85%,var(--ink)); }
+.validation-error { display:block; text-align:left; white-space:normal; color:var(--alarm); margin:4px 0; }
+input[type="number"],input[list],table { font-family:var(--din); }
+.status-strip>.actions { flex-wrap:nowrap; flex:none; margin-left:auto; }
+.error,.error-toast,.invalid .editor-status,.validation-error,button.danger,.plant-status .alarm-cell { color:color-mix(in srgb,var(--alarm) 50%,var(--ink)); }

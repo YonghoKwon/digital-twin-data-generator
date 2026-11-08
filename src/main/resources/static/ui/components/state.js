@@ -14,7 +14,7 @@ export function persistForm(node, key) {
   const saved = readState(key, {});
   const counts = new Map();
   for (const input of controls) {
-    const label = input.closest('label')?.querySelector('span')?.textContent || input.getAttribute('aria-label') || input.id || input.type;
+    const label = input.closest('label')?.textContent || input.closest('.editor')?.querySelector('label')?.textContent || input.getAttribute('aria-label') || input.id || input.type;
     const count = counts.get(label) || 0;
     counts.set(label, count + 1);
     input.dataset.draftKey = `${label}-${count}`;
@@ -25,8 +25,10 @@ export function persistForm(node, key) {
       input.dispatchEvent(new Event('change', { bubbles: true }));
     }
   }
-  const save = () => writeState(key, Object.fromEntries(controls.map(input => [input.dataset.draftKey,
-    input.type === 'checkbox' ? input.checked : input.value])));
+  const save = () => writeState(key, Object.fromEntries(controls.filter(input => {
+    if (input.tagName !== 'TEXTAREA') return true;
+    try { JSON.parse(input.value); return true; } catch { return false; }
+  }).map(input => [input.dataset.draftKey, input.type === 'checkbox' ? input.checked : input.value])));
   node.addEventListener('input', save);
   node.addEventListener('change', save);
 }

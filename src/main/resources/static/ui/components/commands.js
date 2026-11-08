@@ -1,4 +1,4 @@
-﻿import { el, button, field, table } from './ui.js';
+import { el, button, field, table } from './ui.js';
 import { searchCommands } from './state.js';
 import { plant, stopAll, websocketAddress } from './plant.js';
 import { copyText, toast } from './ui.js';

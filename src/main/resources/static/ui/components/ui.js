@@ -70,16 +70,16 @@ export function toast(message, error = false) {
 }
 export function errorBox() {
   const node = el('div', { class: 'error', role: 'alert', hidden: true });
-  return { node, clear() { node.hidden = true; node.textContent = ''; }, show(error) {
+  return { node, clear() { node.hidden = true; node.textContent = ''; }, show(error, operation = '') {
     if (error.name === 'AbortError') return;
     const guidance = error.status === 502 ? '브로커 주소와 연결 상태를 확인하세요.' : error.status === 409 ? '실행 ID와 현재 상태를 확인하세요.' : error.status === 404 ? '대상과 서버 기능을 확인하세요.' : '입력 값과 JSON 오류 위치를 확인하세요.';
-    node.hidden = false; node.textContent = `${errorText(error)}\n${guidance}`; toast(node.textContent, true);
+    node.hidden = false; node.textContent = `${operation ? `${operation} 실패\n` : ''}${errorText(error)}\n${guidance}`; toast(node.textContent, true);
   } };
 }
 export async function action(control, errors, callback) {
   if (control.disabled) return;
   control.disabled = true; errors.clear();
-  try { await callback(); } catch (error) { errors.show(error); }
+  try { await callback(); } catch (error) { errors.show(error, control.textContent); }
   finally { control.disabled = false; }
 }
 export function actionButton(label, errors, callback, kind = '') {
@@ -128,7 +128,7 @@ export function jsonEditor(label, initial = {}, rows = 12) {
 }
 export function tokenHelp(editor) {
   const tokens = [['seq', '{{seq}}'], ['now', '{{now}}'], ['now 형식', "{{now:yyyy-MM-dd'T'HH:mm:ss}}"], ['uuid', '{{uuid}}'], ['random', '{{random:Integer:1..10}}'], ['walk', '{{walk:20:10..30:0.5}}'], ['cycle', '{{cycle:OK|WARN}}'], ['pick', '{{pick:A|B}}']];
-  return el('details', {}, el('summary', {}, '토큰 도움말 · 예시 삽입'), help('문자열 전체가 토큰이면 숫자·불리언 타입을 유지합니다. 삽입 위치를 선택한 후 누르세요. 문자열 밖에서는 따옴표를 함께 삽입합니다.'), el('div', { class: 'token-grid' }, tokens.map(([name, token]) => button(name, () => {
+  return el('details', {}, el('summary', {}, '토큰 도움말   예시 삽입'), help('문자열 전체가 토큰이면 숫자·불리언 타입을 유지합니다. 삽입 위치를 선택한 후 누르세요. 문자열 밖에서는 따옴표를 함께 삽입합니다.'), el('div', { class: 'token-grid' }, tokens.map(([name, token]) => button(name, () => {
     const area = editor.textarea;
     const prefix = area.value.slice(0, area.selectionStart);
     let inside = false, escaped = false;

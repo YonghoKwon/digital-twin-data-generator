@@ -1,4 +1,4 @@
-﻿import { createScope } from './api.js';
+import { createScope } from './api.js';
 import { el, errorBox } from './components/ui.js';
 import { readState, writeState, persistForm } from './components/state.js';
 import { startStatus, stopAll } from './components/plant.js';

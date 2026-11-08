@@ -1,6 +1,6 @@
-﻿import { active, request } from '../api.js';
+import { active, request } from '../api.js';
 import { el, badge, button, confirmAction, copyText, toast } from './ui.js';
-import { collectSuggestions, CounterRate, writeState } from './state.js';
+import { collectSuggestions, CounterRate, readState, writeState } from './state.js';
 import { loadHistory } from './history.js';
 
 export const plant = { streams: [], subscriptions: [], runs: [], tasks: [], library: [], definitions: new Map() };
@@ -18,12 +18,12 @@ export async function stopAll() {
 }
 export function websocketAddress() { return plant.broker?.websocketUrl || ''; }
 export function rememberMessage(request) {
-  const recent = loadHistory().map(x => x.request);
+  const recent = readState('recent-inputs', []);
   recent.unshift({ topic: request.topic, messageId: request.messageId });
   writeState('recent-inputs', recent.slice(0, 30));
   updateSuggestions(recent);
 }
-function updateSuggestions(recent = loadHistory().map(x => x.request)) {
+function updateSuggestions(recent = [...readState('recent-inputs', []), ...loadHistory().map(x => x.request)]) {
   const values = collectSuggestions({ ...plant, scenarios: [...plant.definitions.values()], recent });
   for (const [id, entries] of [['known-topics', values.topics], ['known-message-ids', values.messageIds]]) {
     document.getElementById(id)?.replaceChildren(...entries.map(value => el('option', { value })));
