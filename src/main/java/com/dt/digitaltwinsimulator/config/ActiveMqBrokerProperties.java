@@ -11,6 +11,10 @@ public class ActiveMqBrokerProperties {
     private String password = "artemis";
     private String topic = "topic.cep.output.0";
     private int sessionCacheSize = 100;
+    private int connectTimeoutMs = 3000;
+
+    public int getConnectTimeoutMs() { return connectTimeoutMs; }
+    public void setConnectTimeoutMs(int value) { this.connectTimeoutMs = value; }
 
     public String getBrokerUrl() {
         return brokerUrl;

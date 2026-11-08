@@ -12,7 +12,8 @@ REST API 요청으로 특정 포맷의 데이터를 대량 생성한 뒤 ActiveM
 
 JSON 요청/응답의 기존 기본 동작은 `spring.jackson.use-jackson2-defaults=true`로 유지합니다.
 이 설정은 Jackson 3에 적용되며, Jackson annotation 패키지는 `com.fasterxml.jackson.annotation`을 유지합니다.
-JPA/H2/Postgres 의존성과 H2 콘솔(`/h2-console`)은 유지합니다.
+DB 기능은 제외하며 JPA/H2/Postgres 의존성과 H2 콘솔, 개발용 `/test` API는 제거했습니다.
+설정은 `application.properties`에 통합되어 있으며 Java 21 virtual threads와 기본 포트 8080을 유지합니다.
 
 ## Swagger UI
 
@@ -50,7 +51,50 @@ simulator.activemq.username=artemis
 simulator.activemq.password=artemis
 simulator.activemq.topic=topic.cep.output.0
 simulator.activemq.session-cache-size=100
+simulator.activemq.connect-timeout-ms=3000
 ```
+
+JmsTemplate 부하 테스트도 `activeMQIp`, `id`, `pw`, `topic` override를 동일하게 지원합니다.
+공통 `broker` 패키지의 `BrokerSettings`, `BrokerConnectionService`, `MessagePublisher`를 사용하며,
+JMS 구현은 task별 connection/session cache를 닫습니다. 발행 계층의 headers는 JMS string property로 설정됩니다.
+연결 확인과 전송 factory에 `callTimeout`, `callFailoverTimeout`, `connect-timeout-millis`를 설정하고,
+`initialConnectAttempts=0`, `reconnectAttempts=0`으로 재시도를 끕니다.
+
+## 파일 접근 제한과 사전 검증
+
+```properties
+simulator.files.base-dir=./data
+# application-local.properties에서는 c:/Project
+```
+
+`filePath`는 서버의 base-dir 하위만 허용합니다. `filePath="."`는 base-dir 자체이고,
+`"samples"`는 base-dir의 samples 디렉터리입니다. 절대 경로는 base-dir 내부일 때만 허용합니다.
+`..`로 외부에 접근하거나 다른 드라이브·외부 절대 경로·symlink로 외부 파일을 읽으면 400입니다.
+파일 예시는 서버의 base-dir에 파일을 준비한 뒤 실행합니다. local profile에서는 같은 `"."`가 `c:/Project`를 가리킵니다.
+
+비동기 전송 3종은 요청 스레드에서 입력 검증, 파일 읽기, dry-run 1건 생성·JSON 검증 후
+브로커 connect/start/close 확인을 수행합니다. 실패하면 task를 시작하지 않습니다.
+첫 메시지 이후의 생성·전송 실패는 해당 task를 FAILED로 종료하며 잘못된 JSON은 발행하지 않습니다.
+dry-run은 브로커에 연결하지 않습니다.
+
+| HTTP | error | 조건 |
+| --- | --- | --- |
+| 400 | `INVALID_REQUEST` | 입력, 파일 경로/내용, 생성 JSON 오류 |
+| 502 | `BROKER_CONNECTION_FAILED` | 사전 브로커 연결·인증 실패 |
+| 409 | `DUPLICATE_TASK_ID` | 실행 중인 ID로 JmsTemplate 부하 테스트 요청 |
+
+오류 응답은 `{"error":"INVALID_REQUEST","message":"<원인>"}` 형식입니다. 400의 `message`에는 고쳐야 할 원인(예: `File path is outside the allowed base directory.`, `데이터 row의 컬럼 수가 ...`)이 들어갑니다(민감값은 마스킹).
+성공 응답 문자열 `success : Started 1 tasks with base ID sample-random-1`은 유지합니다.
+일반 전송 ID에는 기존 UUID suffix가 붙으며, 실행 중인 JmsTemplate taskId는 원자적으로 중복을 차단합니다.
+dry-run과 `LoadTestResultDto` 응답 구조는 유지합니다.
+
+전송 계약은 다음과 같습니다. 아래 사용 예의 `sample-...-1`은 모두 `{taskId}` 값입니다.
+
+| 용도 | 경로 | 예시 taskId |
+| --- | --- | --- |
+| 일반 랜덤/value | `/activemq/request/{taskId}` | `sample-random-1`, `sample-value-1` |
+| 파일 | `/activemq/request/file/{taskId}` | `sample-file-1` |
+| 파일+데이터 | `/activemq/request/file-data/{taskId}` | `sample-file-data-1` |
 
 ## Profile별 request/response logging
 
@@ -75,6 +119,9 @@ logging.level.com.dt.digitaltwinsimulator=INFO
 ```
 
 로그에는 `id`, `username`, `user`, `pw`, `password` 계열 민감값이 마스킹됩니다.
+메시지 본문은 DEBUG로 기록하고 `simulator.message-log.sample-every=0`이면 INFO 본문 샘플은 끕니다.
+양수 N이면 task별 성공 전송 N건마다 INFO 샘플을 남깁니다. 모든 본문 로그는 `SensitiveLogMasker.mask`를 적용합니다.
+task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 요약합니다.
 
 ## 공통 요청 필드
 
@@ -91,8 +138,12 @@ logging.level.com.dt.digitaltwinsimulator=INFO
 | repeatTime | `messageCount`가 없을 때 전송 지속 시간(ms) | `10000` |
 | messageCount | 명시적 생성 횟수. 지정 시 `repeatTime`보다 우선 | `1000` |
 | concurrentTasks | 동시 실행 task 수. 1~2000 | `10` |
+| typedValues | 일반 format/value 요청 전용. 기본 false: 문자열, true: Integer/Double/Boolean을 JSON number/boolean으로 출력 | `false` |
 
 `targetTps`와 `delayTime`을 함께 주면 둘 다 적용됩니다. TPS 기준 전송을 테스트할 때는 보통 `delayTime=0`을 권장합니다.
+`typedValues=true`는 랜덤값과 value row 모두에 적용됩니다. String/Date는 문자열을 유지하고,
+타입과 맞지 않는 숫자·boolean 값은 오류입니다. 예: Integer/Double/Boolean 값 `12,2.5,true`는
+기본값에서 `"12","2.5","true"`, opt-in에서 `12,2.5,true`로 출력됩니다.
 
 ## 1. Dry-run
 
@@ -112,7 +163,7 @@ Content-Type: application/json
   "repeatBoolean": true,
   "repeatTime": 0,
   "messageCount": 1,
-  "filePath": "c:/Project/",
+  "filePath": ".",
   "formatFileName": "KE2D1Z11_format.txt",
   "dataFileName": "KE2D1Z11_data.txt",
   "concurrentTasks": 1
@@ -152,7 +203,7 @@ Content-Type: application/json
 `value`를 비우거나 생략하면 `format` 정의에 맞춰 랜덤 데이터를 생성합니다.
 
 ```http
-POST http://localhost:8080/activemq/request/random-bulk
+POST http://localhost:8080/activemq/request/sample-random-1
 Content-Type: application/json
 ```
 
@@ -197,7 +248,7 @@ Content-Type: application/json
 `messageCount`는 value row 전체를 몇 번 반복할지 의미합니다.
 
 ```http
-POST http://localhost:8080/activemq/request/value-bulk
+POST http://localhost:8080/activemq/request/sample-value-1
 Content-Type: application/json
 ```
 
@@ -234,7 +285,7 @@ Content-Type: application/json
 `repeatBoolean=false`여도 1회 전송합니다.
 
 ```http
-POST http://localhost:8080/activemq/request/file/file-bulk
+POST http://localhost:8080/activemq/request/file/sample-file-1
 Content-Type: application/json
 ```
 
@@ -246,7 +297,7 @@ Content-Type: application/json
   "repeatBoolean": true,
   "repeatTime": 0,
   "messageCount": 100,
-  "filePath": "c:/Project/",
+  "filePath": ".",
   "fileName": "KE2D1Z11_format.txt",
   "concurrentTasks": 1
 }
@@ -257,7 +308,7 @@ Content-Type: application/json
 핵심 사용 방식입니다. `KE2D1Z11_format.txt`와 `KE2D1Z11_data.txt`를 읽어서 format 파일의 placeholder를 data 파일 값으로 치환한 뒤 ActiveMQ로 전송합니다.
 
 ```http
-POST http://localhost:8080/activemq/request/file-data/file-data-bulk
+POST http://localhost:8080/activemq/request/file-data/sample-file-data-1
 Content-Type: application/json
 ```
 
@@ -269,7 +320,7 @@ Content-Type: application/json
   "repeatBoolean": true,
   "repeatTime": 0,
   "messageCount": 100,
-  "filePath": "c:/Project/",
+  "filePath": ".",
   "formatFileName": "KE2D1Z11_format.txt",
   "dataFileName": "KE2D1Z11_data.txt",
   "concurrentTasks": 1
@@ -315,6 +366,39 @@ WARN,25.3,1003
 status,message,temperature
 OK,"hello, world",25.1
 WARN,"quoted ""text"" sample",25.2
+```
+
+placeholder가 JSON 문자열 안에 있으면 값의 따옴표·역슬래시·제어문자를 JSON escape합니다.
+문자열 여부는 템플릿의 따옴표와 escape 상태로 판별하며 `"prefix {{x}} suffix"`도 지원합니다.
+따옴표 밖의 `{{n}}`은 원문을 삽입하므로 숫자·boolean·JSON object 등을 넣을 수 있으며, 생성 후 JSON을 검증합니다.
+예: `"message":"{{message}}","temperature":{{temperature}}`에 `quoted "text",25.1`을 매핑하면
+문자열의 따옴표는 escape되고 temperature는 숫자가 됩니다.
+
+### 5-4. file-data 추가 필드 설정
+
+`transaction_code`는 기존처럼 tcName을 사용합니다. 나머지 EAI 고정 필드는
+`simulator.message.file-data-extra-fields`의 `LinkedHashMap`으로 관리합니다.
+기본값의 순서, 빈 문자열, 공백 한 글자는 기존과 동일하며 출력 바이트를 회귀 테스트합니다.
+
+| 기본 키 (출력 순서) | 기본 문자열 값 |
+| --- | --- |
+| works_code | `K` |
+| sndr_inform_edit_pgm_id | 빈 문자열 |
+| eai_interface_id | 빈 문자열 |
+| interface_data_dir_actual_type | 빈 문자열 |
+| interface_data_ocr_res_flag | 빈 문자열 |
+| interface_data_send_seq | `0` |
+| interface_data_upd_tp | 빈 문자열 |
+| interface_data_t_len | `760` |
+| attribute | 공백 한 글자 |
+| bsc_gw_data_attr | 공백 한 글자 |
+| it_com_eai_ifc_var_item_usg_f | 공백 한 글자 |
+
+키의 underscore를 보존하려면 properties에서 대괄호로 설정합니다. 지정한 키만 override하며 새 키는 뒤에 추가됩니다.
+
+```properties
+simulator.message.file-data-extra-fields[works_code]=K
+simulator.message.file-data-extra-fields[interface_data_t_len]=760
 ```
 
 ## 6. JmsTemplate 기반 부하 테스트 모드
@@ -374,6 +458,9 @@ Task 상태 이력 DB 저장 기능과 `/activemq/task/statuses` 계열 API는 �
 
 Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용합니다. 설치된 Maven으로 `mvn test`도 가능합니다.
 테스트는 외부 Artemis 브로커 없이 실행되며, dry-run의 `messages` object 응답도 검증합니다.
+브로커 서비스 mock과 닫힌 포트 `tcp://127.0.0.1:1`로 연결 실패를 검증하고 서버 테스트는 RANDOM_PORT를 사용합니다.
+경로 제한, JSON escape/전송 전 검증, 400/502/409, EAI 기본 출력 바이트, typedValues를 포함합니다.
+Windows에서 symlink 생성 권한이 없으면 해당 테스트만 Assumptions로 skip하며 사유를 결과에 기록합니다.
 CI는 GitHub Actions에서 Java 21 기준으로 `mvn -B test`를 수행합니다.
 
 ## REST Mock

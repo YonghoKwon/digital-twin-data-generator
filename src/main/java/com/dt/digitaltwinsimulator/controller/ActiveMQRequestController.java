@@ -41,6 +41,7 @@ class ActiveMQRequestController {
     @Operation(summary = "ActiveMQ 메시지 전송", description = "ActiveMQ message send")
     @PostMapping("/{taskId}")
     public String activemqNormal(@PathVariable String taskId, @Valid @RequestBody ActiveMQRequestDto activeMQRequestDto) {
+        activeMQRequestLogic.preflight(activeMQRequestDto);
         int taskCount = normalizeConcurrentTasks(activeMQRequestDto.getConcurrentTasks());
         for (int i = 0; i < taskCount; i++) {
             activeMQRequestLogic.sendTopic(makeUniqueTaskId(taskId, i), activeMQRequestDto);
@@ -68,7 +69,8 @@ class ActiveMQRequestController {
 
     @Operation(summary = "ActiveMQ 파일 메시지 전송(동일한 메시지 반복)", description = "ActiveMQ file message send")
     @PostMapping("/file/{taskId}")
-    public String activemqFile(@PathVariable String taskId, @Valid @RequestBody ActiveMQRequestFileDto activeMQRequestFileDto) {
+    public String activemqFile(@PathVariable String taskId, @Valid @RequestBody ActiveMQRequestFileDto activeMQRequestFileDto) throws IOException {
+        activeMQRequestLogic.preflight(activeMQRequestFileDto);
         int taskCount = normalizeConcurrentTasks(activeMQRequestFileDto.getConcurrentTasks());
         for (int i = 0; i < taskCount; i++) {
             activeMQRequestLogic.sendFileTopic(makeUniqueTaskId(taskId, i), activeMQRequestFileDto);
@@ -87,7 +89,8 @@ class ActiveMQRequestController {
 
     @Operation(summary = "ActiveMQ 파일 & 데이터 메시지 전송", description = "ActiveMQ file & data message send")
     @PostMapping("/file-data/{taskId}")
-    public String activemqFileAndData(@PathVariable String taskId, @Valid @RequestBody ActiveMQRequestFileAndDataDto activeMQRequestFileAndDataDto) {
+    public String activemqFileAndData(@PathVariable String taskId, @Valid @RequestBody ActiveMQRequestFileAndDataDto activeMQRequestFileAndDataDto) throws IOException {
+        activeMQRequestLogic.preflight(activeMQRequestFileAndDataDto);
         int taskCount = normalizeConcurrentTasks(activeMQRequestFileAndDataDto.getConcurrentTasks());
         for (int i = 0; i < taskCount; i++) {
             activeMQRequestLogic.sendFileAndDataTopic(makeUniqueTaskId(taskId, i), activeMQRequestFileAndDataDto);

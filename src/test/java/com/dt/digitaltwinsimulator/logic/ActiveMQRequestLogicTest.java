@@ -15,7 +15,11 @@ class ActiveMQRequestLogicTest {
     private final ActiveMQRequestLogic logic = new ActiveMQRequestLogic(
             new TaskCancellationLogic(),
             new TaskExecutionStatusLogic(),
-            new ActiveMqBrokerProperties(),
+            new com.dt.digitaltwinsimulator.broker.BrokerConnectionService(new ActiveMqBrokerProperties()),
+            org.mockito.Mockito.mock(com.dt.digitaltwinsimulator.broker.MessagePublisher.class),
+            new com.dt.digitaltwinsimulator.config.SimulatorFileProperties(),
+            new com.dt.digitaltwinsimulator.config.MessageProperties(),
+            new MessageBodyLogger(0),
             JsonMapper.builder().build()
     );
     private final JsonMapper objectMapper = JsonMapper.builder().build();

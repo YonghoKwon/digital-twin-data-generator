@@ -17,7 +17,7 @@
 
 ### 1) REST API url 변경
 
-## 5. DB Controller 추가
+## (제외) 5. DB Controller 추가
 
-### 1) 내장 H2 DB add
-### 2) 외장 Postgresql DB add
+### (제외) 1) 내장 H2 DB add
+### (제외) 2) 외장 Postgresql DB add
