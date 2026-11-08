@@ -119,6 +119,10 @@ logging.level.com.dt.digitaltwinsimulator=INFO
 ```
 
 로그에는 `id`, `username`, `user`, `pw`, `password` 계열 민감값이 마스킹됩니다.
+`Accept`에 `text/event-stream`이 있거나 `simulator.http-logging.exclude-paths`에 맞으면
+공통 로깅 필터가 요청/응답 로깅과 본문 캐싱을 건너뛰어 실시간 flush를 유지합니다.
+`exclude-paths`는 쉼표로 구분한 Ant 패턴 목록이며 기본값은 `/dt/subscriptions/*/stream`입니다.
+예: `simulator.http-logging.exclude-paths=/dt/subscriptions/*/stream,/dt/live/**`.
 메시지 본문은 DEBUG로 기록하고 `simulator.message-log.sample-every=0`이면 INFO 본문 샘플은 끕니다.
 양수 N이면 task별 성공 전송 N건마다 INFO 샘플을 남깁니다. 모든 본문 로그는 `SensitiveLogMasker.mask`를 적용합니다.
 task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 요약합니다.
@@ -478,7 +482,7 @@ java -jar target/digital-twin-simulator-0.0.1-SNAPSHOT.jar --simulator.embedded-
 | 설정 (`simulator.embedded-broker.` 아래) | 기본값 | 의미 |
 | --- | --- | --- |
 | `enabled` | `false` | 명시적으로 켬 |
-| `use-as-default` | `true` | enabled일 때 주소 생략 요청의 기본값 |
+| `use-as-default` | `true` | enabled이며 실제 running일 때 주소 생략 요청의 기본값 |
 | `host` | `0.0.0.0` | bind 주소 |
 | `core-port` / `stomp-port` | `61626` / `61623` | JMS core / STOMP TCP+WebSocket 공용 |
 | `username` / `password` | `artemis` / `artemis` | 허용할 단일 계정 |
@@ -494,11 +498,12 @@ JMS property 원문 노출을 막기 위해 내장 브로커 실행 중 Artemis 
 앱 종료 순서는 구독→브로커입니다. 브로커 기동 실패에도 HTTP 앱은 유지되고
 `GET /dt/broker`에 `running=false, lastError`가 표시됩니다.
 
-enabled 및 use-as-default가 true이고 요청의 `activeMQIp`가 생략/공백이면 일반/file/file-data 전송,
+enabled 및 use-as-default가 true이고 실제 running이며 요청의 `activeMQIp`가 생략/공백이면 일반/file/file-data 전송,
 JmsTemplate 부하 테스트, 구독 및 `BrokerConnectionService.resolve`를 사용하는 API가
 내장 core 주소와 계정을 기본값으로 사용합니다. 요청 `id/pw`는 각각 override할 수 있습니다.
 명시 URL은 기존 외부 기본 계정을 사용하므로 필요한 `id/pw`도 함께 지정하세요.
-내장 브로커 기동 실패 시 외부로 자동 우회하지 않습니다.
+내장 브로커 기동 실패/중지 시 외부 기본 주소와 계정으로 fallback합니다.
+`GET /dt/broker`의 `defaultTarget`(`EMBEDDED` 또는 `EXTERNAL`)으로 현재 기본 전송 대상을 확인합니다.
 
 UE DTCoreSettings 예시 (위에서 설정한 계정 입력):
 
@@ -528,7 +533,8 @@ DTCore의 실제 STOMP 헤더에 맞춰 확인하세요.
 | GET | `/dt/broker` | disabled일 때도 상태 제공 |
 | POST | `/dt/subscriptions` | 201 및 Location |
 | GET | `/dt/subscriptions` | 목록, 상태, 누적 수/마지막 수신/오류 |
-| GET | `/dt/subscriptions/{id}/messages?limit=100&afterSeq=0&messageId=UE-1` | 일치 기록, seq 오름차순 |
+| GET | `/dt/subscriptions/{id}/messages?limit=100&messageId=UE-1` | 일치하는 최근 limit개, seq 오름차순 |
+| GET | `/dt/subscriptions/{id}/messages?limit=100&afterSeq=42&messageId=UE-1` | seq>42부터 일치하는 limit개, seq 오름차순 |
 | GET | `/dt/subscriptions/{id}/stream` | SSE 신규 기록 |
 | DELETE | `/dt/subscriptions/{id}/messages` | 버퍼 비움, 204 |
 | DELETE | `/dt/subscriptions/{id}` | 구독/연결 제거, 204 |
@@ -556,17 +562,24 @@ non-durable topic consumer이므로 연결 전/재연결 중 메시지를 복원
 bufferSize 기본 1000, 허용 1~`simulator.subscribe.max-buffer`(기본 10000),
 동시 구독은 `simulator.subscribe.max-subscriptions`(기본 20)까지입니다.
 오래된 기록부터 버리며 버퍼를 비워도 receivedCount/seq는 계속 증가합니다.
-조회 limit 기본 100, 허용 1~max-buffer이며 afterSeq는 초과(>) 조건, messageId와 AND입니다.
+조회 limit 기본 100, 허용 1~max-buffer입니다. afterSeq를 생략하면 최근 limit개를 seq 오름차순으로 반환합니다.
+afterSeq를 지정하면 초과(>)하는 seq부터 limit개를 반환합니다(`afterSeq=0`이면 보관된 처음부터).
+messageId 필터는 두 경우 모두 limit 적용 전에 적용합니다.
 중복 ID 409 `DUPLICATE_SUBSCRIPTION_ID`, 한도 초과 429 `SUBSCRIPTION_LIMIT_EXCEEDED`,
 없는 ID 404 `SUBSCRIPTION_NOT_FOUND`, 입력 오류 400, 연결 실패 502입니다.
 오류 JSON은 `{"error","message"}` 형식입니다.
 
-기록: `seq, receivedAt, topic, type, sizeBytes, body, bodyJson, bodyBase64Head, messageId, properties, truncated`.
+기록: `seq, receivedAt, topic, type, encoding, sizeBytes, body, bodyJson, bodyBase64Head, messageId, properties, truncated`.
 TEXT는 UTF-8 바이트 기준 maxBodyBytes(기본 65536, 양수)까지 미리보기를 보관합니다.
 완전한 JSON이면 bodyJson을 JSON 값으로 제공하며 최상위 MESSAGE_ID를 messageId로 추출합니다.
 잘린 TEXT는 bodyJson=null로 두어 제한을 우회하지 않습니다.
-BYTES는 원래 크기와 앞 256바이트 Base64만 보관합니다. 미리보기가 짧으면 truncated=true입니다.
-다른 JMS 메시지는 OTHER입니다. password/passcode/token/secret/authorization/API key 등 민감 property는
+TEXT의 encoding은 UTF8_TEXT입니다. content-length가 있는 STOMP JSON SEND도 BYTES로 유지하되,
+maxBodyBytes까지의 미리보기가 유효한 UTF-8이면 encoding=UTF8_TEXT와 body를 제공합니다.
+잘리지 않은 JSON은 bodyJson과 최상위 MESSAGE_ID의 messageId도 제공하여 필터로 조회할 수 있습니다.
+잘린 BYTES는 bodyJson/messageId=null이며 끝의 불완전 UTF-8 문자는 제외합니다.
+UTF-8이 유효하지 않은 BYTES(PCD 등)는 encoding=BINARY와 앞 256바이트 bodyBase64Head만 제공합니다.
+바이너리 head는 maxBodyBytes가 256 미만이어도 256바이트까지 유지합니다. 미리보기가 짧으면 truncated=true입니다.
+다른 JMS 메시지는 OTHER/encoding=BINARY입니다. password/passcode/token/secret/authorization/API key 등 민감 property는
 마스킹하며 메시지 본문은 UE 디버깅용 원문 미리보기입니다.
 
 ```bash
@@ -575,8 +588,18 @@ curl -N http://localhost:8080/dt/subscriptions/ue-sensors/stream
 
 SSE는 ready 이벤트 뒤 새 기록을 `event: message`, `id: <seq>`로 보내고 15초마다 keepalive를 보냅니다.
 기존 기록 재생/Last-Event-ID 복원은 하지 않으며 누락분은 messages?afterSeq=로 조회합니다.
-느린 SSE 대기열이 min(bufferSize,256)을 넘으면 해당 연결을 닫습니다.
-SSE 경로만 HTTP body logging에서 제외해 응답 버퍼링을 방지합니다.
+느린 SSE 대기열이 min(bufferSize,256)을 넘으면 닫기 전에 아래 이벤트를 best-effort로 보내고,
+본문 없이 구독 id만 포함한 WARN 한 줄을 남깁니다. 소켓이 막혔거나 끊겼으면 이벤트 전달을 보장하지 않습니다.
+
+```text
+event: overflow
+data: {"reason":"SLOW_CONSUMER","dropped":3}
+```
+
+dropped는 버린 대기 기록과 거부된 1건의 합이며 이미 전송 중인 기록은 제외합니다.
+느린 SSE는 끊기므로 마지막으로 받은 seq를 `messages?afterSeq=<seq>&limit=100`에 지정해 이어서 조회합니다.
+복구는 메모리에 남은 구독 버퍼 범위까지입니다.
+공통 RequestResponseLoggingFilter의 Accept/설정 경로 제외로 SSE 응답 버퍼링을 방지합니다.
 
 `.\mvnw.cmd -B test`는 외부 브로커 없이 임의 포트 내장 브로커와 JDK 원시 WebSocket STOMP로
 양방향 본문/헤더, 1 MiB 단일 바이너리 프레임, CRUD/버퍼/마스킹/SSE/재연결/포트 충돌을 검증합니다.

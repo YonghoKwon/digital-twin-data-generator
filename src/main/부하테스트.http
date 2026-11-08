@@ -521,10 +521,14 @@ Content-Type: application/json
 ### core=tcp://localhost:61626, STOMP TCP/WS=61623, 단일 계정=서버 username/password
 ### UE DTCoreSettings: WebSocketUrl=ws://<PC IP>:61623, Login/Passcode=<설정값>
 ### 방화벽: UE TCP 61623, HTTP/SSE 8080, 외부 JMS 61626.
-### use-as-default=true + 주소 생략이면 내장 기본값. 명시 URL에는 필요한 id/pw도 지정.
+### enabled + use-as-default=true + 실제 running + 주소 생략이면 내장 기본값.
+### 기동 실패/중지 시 외부 기본값 fallback. /dt/broker의 defaultTarget=EMBEDDED|EXTERNAL 확인.
+### 명시 URL에는 필요한 id/pw도 지정.
 ### JMS topic=STOMP destination, MULTICAST 기본, /topic/ prefix 붙이지 않음.
 ### dx-schema-version JMS property는 AMQ139012 거부, dx_schema_version은 STOMP 동일 헤더.
-### STOMP content-length 없으면 TEXT, 있으면 BYTES, BYTES 앞 256바이트 Base64.
+### STOMP content-length 없으면 TEXT, 있으면 BYTES. encoding=UTF8_TEXT|BINARY.
+### BYTES도 유효한 UTF-8이면 body(maxBodyBytes), 안 잘린 JSON이면 bodyJson/messageId 제공.
+### 잘린 BYTES의 bodyJson/messageId=null. 바이너리는 bodyBase64Head(앞 256바이트)만 제공.
 ### max-frame-bytes=2097152, stomp-min-large-message-size=102400,
 ### max-size-bytes=104857600, address-full-policy=PAGE(DROP 선택 가능).
 ### ============================================================================
@@ -557,13 +561,20 @@ Content-Type: application/json
 ### 상태/누적 수/마지막 시각/오류
 GET {{host}}/dt/subscriptions
 
-### seq 오름차순, afterSeq 초과 조건, 두 필터 AND
-GET {{host}}/dt/subscriptions/ue-sensors/messages?limit=100&afterSeq=0
+### 최근 100개, seq 오름차순 (afterSeq 생략)
+GET {{host}}/dt/subscriptions/ue-sensors/messages?limit=100
 
-###
-GET {{host}}/dt/subscriptions/ue-sensors/messages?limit=100&afterSeq=0&messageId=UE-1
+### messageId에 맞는 최근 10개 (content-length 있는 STOMP JSON도 조회 가능)
+GET {{host}}/dt/subscriptions/ue-sensors/messages?limit=10&messageId=UE-1
+
+### 마지막 받은 seq 이후부터 100개. afterSeq=0은 보관된 처음부터. messageId와 AND.
+GET {{host}}/dt/subscriptions/ue-sensors/messages?limit=100&afterSeq=42&messageId=UE-1
 
 ### SSE ready 후 새 message 이벤트, id=seq, 15초 keepalive, 기존 버퍼 재생 없음
+### 느린 SSE는 overflow best-effort 후 끊김. data={"reason":"SLOW_CONSUMER","dropped":n}
+### dropped=버린 대기 기록+거부 1건(전송 중 제외). 마지막 seq로 messages?afterSeq= 이어서 조회.
+### Accept: text/event-stream 또는 simulator.http-logging.exclude-paths Ant 패턴에 맞으면 로깅/캐싱 제외.
+### exclude-paths 기본값=/dt/subscriptions/*/stream, 여러 패턴은 쉼표 구분.
 ### curl -N http://localhost:8080/dt/subscriptions/ue-sensors/stream
 GET {{host}}/dt/subscriptions/ue-sensors/stream
 Accept: text/event-stream
