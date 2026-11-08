@@ -19,6 +19,7 @@ public class ActiveMQRequestDto {
     private String id;
     private String pw;
     private String topic;
+    private boolean typedValues;
 
     @NotBlank
     private String tcName;
