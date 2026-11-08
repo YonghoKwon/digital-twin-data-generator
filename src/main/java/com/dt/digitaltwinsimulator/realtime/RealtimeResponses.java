@@ -6,7 +6,9 @@ import java.util.List;
 
 public final class RealtimeResponses {
     private RealtimeResponses() {}
-    public record Publish(long sent, long failed, long elapsedMillis, String topic, JsonNode firstMessage) {}
+    public record Publish(long sent, long failed, long elapsedMillis, String topic, JsonNode firstMessage,
+                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                          String stoppedReason) {}
     public record Preview(int count, String topic, List<JsonNode> messages) {}
     public enum State {
         RUNNING, PAUSED, RECONNECTING, COMPLETED, STOPPED, FAILED;

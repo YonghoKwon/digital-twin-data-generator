@@ -519,9 +519,11 @@ Content-Type: application/json
 ### POST /dt/publish, POST /dt/publish/preview
 ### POST/GET/DELETE /dt/streams, GET/PATCH/DELETE /dt/streams/{id}
 ### standardHeaders: dx-schema-version -> dx_schema_version,
-### dx-message-id -> dx_message_id, dx-sent-at -> dx_sent_at (Artemis JMS 제약 예비안)
+### dx-message-id -> dx_message_id, dx-sent-at -> dx_sent_at (DTCore 규약 dx-*는 JMS 제약으로 dx_* 전달, S4 STOMP 확인)
 ### rateTps > 0, durationSec/maxMessages=0 무한, actualTps 최근 10초 이동 평균
 ### 400 INVALID_REQUEST / 502 BROKER_CONNECTION_FAILED / 409 DUPLICATE_TASK_ID
+### publish는 count만큼 사전 생성: 생성/토큰 오류는 전송 없이 400 + 원인 메시지 (시각/UUID/walk도 사전 결정)
+### 첫 성공 전 브로커 실패 502 / 부분 성공 후 실패 207 + sent/failed:1/stoppedReason:BROKER_ERROR (남은 발행 중단)
 ### 429 STREAM_LIMIT_EXCEEDED / 404 STREAM_NOT_FOUND / 409 STREAM_NOT_ACTIVE
 ### ============================================================================
 

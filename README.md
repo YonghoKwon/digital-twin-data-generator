@@ -497,7 +497,10 @@ Swagger의 `Realtime` 태그에서 JSON 단발 발행과 여러 지속 스트림
 
 `count`를 주면 여러 건을 순서대로 보내며 `intervalMs`는 각 발행 사이 대기 시간입니다.
 성공 응답은 `{"sent":1,"failed":0,"elapsedMillis":12,"topic":"topic.sensor","firstMessage":{...}}`입니다.
-입력/토큰/파일 오류는 400, 브로커 연결·발행 오류는 502이며 기존 `{"error","message"}` 오류 JSON을 사용합니다. 부분 발행 후 실패해도 502이며 이미 보낸 메시지는 취소되지 않습니다.
+count만큼 메시지를 먼저 생성하므로 입력/토큰 오류는 전송 없이 400 `INVALID_REQUEST`와 원인 메시지를 반환합니다. 시각/UUID/walk 값도 이 사전 생성 시점에 결정됩니다.
+첫 전송 전 브로커 연결·발행 오류는 기존 `{"error","message"}` JSON과 502를 반환합니다.
+1건 이상 성공한 뒤 브로커 오류가 나면 `{"sent":2,"failed":1,"stoppedReason":"BROKER_ERROR","elapsedMillis":12,"topic":"topic.sensor","firstMessage":{...}}`와 **207**을 반환하고 남은 발행을 중단합니다.
+207은 일부 발행 완료를 HTTP 상태와 누적 결과로 함께 알리기 위한 선택입니다. 이미 보낸 메시지는 취소되지 않으며, 요청 전체를 다시 보내면 중복될 수 있습니다. 완전 성공은 기존 200과 결과 구조를 유지합니다.
 preview는 같은 요청으로 `{"count":1,"topic":"topic.sensor","messages":[{...}]}`를 반환하며 intervalMs 대기를 하지 않습니다.
 
 기본 `envelope="DTCORE"`는 object payload와 messageId를 요구하며 다음 envelope를 만듭니다. 두 시각 문자열은 같습니다.
@@ -508,7 +511,7 @@ preview는 같은 요청으로 `{"count":1,"topic":"topic.sensor","messages":[{.
 
 `envelope="RAW"`는 임의 JSON을 그대로 직렬화하며, 문자열 payload는 JSON 따옴표 없는 문자열 본문으로 보냅니다. messageId는 RAW에서 선택입니다.
 `headers`는 문자열 map입니다. `standardHeaders=true`는 schema version(기본 `1`), 메시지별 UUID, UTC ISO-8601 발행 시각을 추가합니다.
-**Artemis 2.44.0 JMS 클라이언트가 하이픈 property 이름을 거부하므로 다음 예비안을 적용합니다.**
+**DTCore 규약 `dx-*`는 Artemis 2.44.0 JMS 제약(AMQ139012)으로 `dx_*`로 전달됩니다.** S4에서 `_` 이름이 STOMP 헤더로 그대로 전달됨을 확인했습니다.
 
 | 채널 규약 이름 / API headers 입력 | 실제 JMS string property |
 | --- | --- |
@@ -517,7 +520,7 @@ preview는 같은 요청으로 `{"count":1,"topic":"topic.sensor","messages":[{.
 | `dx-sent-at` | `dx_sent_at` |
 
 사용자 headers의 위 세 이름도 같은 규칙으로 변환합니다. 나머지 이름은 JMS Java 식별자(예약어와 JMS 접두사 제외)여야 합니다.
-표준 헤더를 사용자 값으로 덮어쓰거나 변환 후 이름이 충돌하면 400입니다. 실제 STOMP/DTCore 수신 및 이름 처리는 S4 통합 검증 대상입니다.
+표준 헤더를 사용자 값으로 덮어쓰거나 변환 후 이름이 충돌하면 400입니다. DTCore 수신 측도 위 `_` 이름을 사용해야 합니다. 이 작업의 테스트는 fake publisher를 사용합니다.
 
 센서처럼 매초 부드럽게 바뀌는 값 (`POST /dt/streams`):
 

@@ -314,13 +314,15 @@ task 시작/종료는 INFO로 taskId, 전송 수, 경과 ms, 결과를 남깁니
 ## 실시간 전송
 
 `realtime` 패키지와 `controller/RealtimeController`에서 공통 브로커 계층을 재사용합니다. 스트림 상태는 메모리에만 보관하며 앱 종료 시 모두 정리합니다.
-`POST /dt/publish`는 동기 전송이며 `count=1`, `intervalMs=0`이 기본입니다. 결과는 `{sent,failed,elapsedMillis,topic,firstMessage}`이며 브로커 오류는 502입니다.
+`POST /dt/publish`는 동기 전송이며 `count=1`, `intervalMs=0`이 기본입니다. 성공 결과는 `{sent,failed,elapsedMillis,topic,firstMessage}`입니다.
+count만큼 먼저 생성하므로 생성/토큰 오류는 전송 없이 400 `INVALID_REQUEST`와 원인 메시지를 반환합니다. 시각/UUID/walk 값도 이 사전 생성 시점에 결정됩니다.
+첫 전송 전 브로커 실패는 502, 1건 이상 성공 후 브로커 실패는 누적 sent와 `failed:1,stoppedReason:"BROKER_ERROR"`를 포함한 207입니다. 일부 전송 완료를 HTTP 상태와 결과로 함께 알리기 위해 207을 사용하며 이미 보낸 메시지는 취소하지 않습니다.
 `POST /dt/publish/preview`는 브로커에 연결하지 않고 `{count,topic,messages:[object...]}`를 반환합니다. count는 1~10입니다.
 
 기본 `envelope=DTCORE`는 object payload와 messageId를 요구하며 `CREATE_TIMESTAMP`와 `DATA_MAP` 키에 같은 `yyyyMMddHHmmssSSS` 시각을 넣습니다.
 `RAW`는 임의 JSON을 그대로 직렬화하며 문자열 payload는 따옴표 없는 문자열 본문으로 전송합니다.
 `standardHeaders=true`이면 UUID·UTC ISO-8601·schema version을 JMS string property에 넣습니다.
-Artemis 2.44.0 클라이언트가 하이픈 property를 거부하므로 예비안을 적용합니다:
+DTCore 규약 `dx-*`는 Artemis 2.44.0 JMS 제약(AMQ139012)으로 `dx_*`로 전달됩니다. S4에서 `_` 이름이 STOMP 헤더로 그대로 전달됨을 확인했습니다:
 `dx-schema-version → dx_schema_version`, `dx-message-id → dx_message_id`, `dx-sent-at → dx_sent_at`.
 사용자 headers에서도 이 세 이름만 변환하며 나머지는 JMS Java 식별자 규칙(예약어/JMS 접두사 제외)을 검증합니다. 표준 헤더 덮어쓰기와 변환 후 충돌은 400입니다.
 

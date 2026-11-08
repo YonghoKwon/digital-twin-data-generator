@@ -17,7 +17,10 @@ public class RealtimeController {
     public RealtimeController(RealtimeService service) { this.service = service; }
 
     @PostMapping("/publish")
-    public RealtimeResponses.Publish publish(@RequestBody RealtimeRequest request) { return service.publish(request); }
+    public ResponseEntity<RealtimeResponses.Publish> publish(@RequestBody RealtimeRequest request) {
+        var result = service.publish(request);
+        return ResponseEntity.status("BROKER_ERROR".equals(result.stoppedReason()) ? 207 : 200).body(result);
+    }
 
     @PostMapping("/publish/preview")
     public RealtimeResponses.Preview preview(@RequestBody RealtimeRequest request) { return service.preview(request); }

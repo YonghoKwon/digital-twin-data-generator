@@ -28,6 +28,7 @@ class RealtimeControllerTest {
     @Autowired RealtimeService service;
     @MockitoBean MessagePublisher publisher;
     @MockitoSpyBean BrokerConnectionService connections;
+    @MockitoSpyBean DtMessageFactory factory;
     private MessagePublisher.Publication publication;
 
     @BeforeEach void setup() {
@@ -69,6 +70,41 @@ class RealtimeControllerTest {
                 .andExpect(status().isBadGateway()).andExpect(jsonPath("$.error").value("BROKER_CONNECTION_FAILED"))
                 .andExpect(jsonPath("$.message").isString());
         verifyNoInteractions(publisher);
+    }
+
+    @Test
+    void brokerFailureAfterSuccessfulMessagesReturns207AndPreservesProgress() throws Exception {
+        doNothing().when(connections).verifyConnection(any());
+        doNothing().doNothing().doThrow(new IllegalStateException("provider failure"))
+                .when(publication).publish(any(), any(), any());
+        mvc.perform(post("/dt/publish").contentType(MediaType.APPLICATION_JSON).content(body(",\"count\":5")))
+                .andExpect(status().is(207)).andExpect(jsonPath("$.sent").value(2))
+                .andExpect(jsonPath("$.failed").value(1)).andExpect(jsonPath("$.stoppedReason").value("BROKER_ERROR"))
+                .andExpect(jsonPath("$.firstMessage.MESSAGE_ID").value("TC"))
+                .andExpect(jsonPath("$.topic").value("topic.test")).andExpect(jsonPath("$.elapsedMillis").isNumber());
+        verify(publication, times(3)).publish(any(), any(), any());
+        verify(publication).close();
+    }
+
+    @Test
+    void firstPublicationFailureStillReturns502AndClosesScope() throws Exception {
+        doNothing().when(connections).verifyConnection(any());
+        doThrow(new IllegalStateException("provider failure")).when(publication).publish(any(), any(), any());
+        mvc.perform(post("/dt/publish").contentType(MediaType.APPLICATION_JSON).content(body(",\"count\":3")))
+                .andExpect(status().isBadGateway()).andExpect(jsonPath("$.error").value("BROKER_CONNECTION_FAILED"));
+        verify(publication).publish(any(), any(), any());
+        verify(publication).close();
+    }
+
+    @Test
+    void laterMessageGenerationFailureReturns400WithCauseBeforeAnyBrokerIo() throws Exception {
+        doThrow(new IllegalArgumentException("Invalid value token (random)."))
+                .when(factory).create(any(), any(), eq(3L), any());
+        mvc.perform(post("/dt/publish").contentType(MediaType.APPLICATION_JSON).content(body(",\"count\":5")))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Invalid value token (random)."));
+        verifyNoInteractions(publisher);
+        verify(connections, never()).verifyConnection(any());
     }
 
     @Test

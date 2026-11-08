@@ -41,7 +41,13 @@ public class RealtimeService {
         var spec = validatePublish(request, false);
         var broker = broker(request);
         var tokens = new DtMessageFactory.TokenState();
-        var first = factory.create(spec, request.getPayload(), 1, tokens);
+        // Generate every message before broker I/O so a later token failure is still a 400
+        // with no publication side effects, rather than being mistaken for a broker error.
+        List<DtMessageFactory.Message> messages = new ArrayList<>();
+        for (int i = 1; i <= request.getCount(); i++) {
+            messages.add(factory.create(spec, request.getPayload(), i, tokens));
+        }
+        var first = messages.getFirst();
         long started = System.nanoTime();
         long sent = 0;
         // Probe validates endpoint/authentication using the common timeout policy.
@@ -49,7 +55,7 @@ public class RealtimeService {
         try (var publication = publisher.open(broker)) {
             for (int i = 0; i < request.getCount(); i++) {
                 if (i > 0 && request.getIntervalMs() > 0) Thread.sleep(request.getIntervalMs());
-                var message = i == 0 ? first : factory.create(spec, request.getPayload(), i + 1L, tokens);
+                var message = messages.get(i);
                 publication.publish(broker.topic(), message.body(), message.headers());
                 bodyLogger.logMessage("dt-publish", ++sent, message.body());
             }
@@ -57,9 +63,11 @@ public class RealtimeService {
             Thread.currentThread().interrupt();
             throw new BrokerConnectionException(e);
         } catch (RuntimeException e) {
-            throw new BrokerConnectionException(e);
+            if (sent == 0) throw new BrokerConnectionException(e);
+            return new RealtimeResponses.Publish(sent, 1, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),
+                    broker.topic(), first.object(), "BROKER_ERROR");
         }
-        return new RealtimeResponses.Publish(sent, 0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), broker.topic(), first.object());
+        return new RealtimeResponses.Publish(sent, 0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), broker.topic(), first.object(), null);
     }
 
     public RealtimeResponses.Preview preview(RealtimeRequest request) {
