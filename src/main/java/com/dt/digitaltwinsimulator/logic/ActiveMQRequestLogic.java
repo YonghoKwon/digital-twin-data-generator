@@ -5,10 +5,9 @@ import com.dt.digitaltwinsimulator.entity.dto.ActiveMQRequestDto;
 import com.dt.digitaltwinsimulator.entity.dto.ActiveMQRequestFileAndDataDto;
 import com.dt.digitaltwinsimulator.entity.dto.ActiveMQRequestFileDto;
 import com.dt.digitaltwinsimulator.entity.dto.DryRunResponseDto;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.JMSException;
@@ -50,13 +49,13 @@ public class ActiveMQRequestLogic {
     private final TaskCancellationLogic taskCancellationLogic;
     private final TaskExecutionStatusLogic taskExecutionStatusLogic;
     private final ActiveMqBrokerProperties brokerProperties;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper objectMapper;
 
-    public ActiveMQRequestLogic(TaskCancellationLogic taskCancellationLogic, TaskExecutionStatusLogic taskExecutionStatusLogic, ActiveMqBrokerProperties brokerProperties) {
+    public ActiveMQRequestLogic(TaskCancellationLogic taskCancellationLogic, TaskExecutionStatusLogic taskExecutionStatusLogic, ActiveMqBrokerProperties brokerProperties, JsonMapper objectMapper) {
         this.taskCancellationLogic = taskCancellationLogic;
         this.taskExecutionStatusLogic = taskExecutionStatusLogic;
         this.brokerProperties = brokerProperties;
-        this.objectMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+        this.objectMapper = objectMapper;
     }
 
     @Async("threadPoolTaskExecutor")
@@ -77,7 +76,7 @@ public class ActiveMQRequestLogic {
                 }
             }
             taskExecutionStatusLogic.markSuccess(taskId);
-        } catch (JMSException | JsonProcessingException e) {
+        } catch (JMSException | JacksonException e) {
             taskExecutionStatusLogic.markFailed(taskId, e);
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
@@ -90,7 +89,7 @@ public class ActiveMQRequestLogic {
         return CompletableFuture.completedFuture("success");
     }
 
-    public DryRunResponseDto dryRunTopic(ActiveMQRequestDto requestDto, int limit) throws JsonProcessingException {
+    public DryRunResponseDto dryRunTopic(ActiveMQRequestDto requestDto, int limit) throws JacksonException {
         FormatDefinition formatDefinition = FormatDefinition.from(requestDto.getFormat());
         List<String> valueRows = sortedValueRows(requestDto.getValue());
         int max = sanitizeLimit(limit);
@@ -114,7 +113,7 @@ public class ActiveMQRequestLogic {
         return createDryRunResponse(limit, repeatCount, sourceRowCount, (long) repeatCount * sourceRowCount, "VALUE_ROWS", messages);
     }
 
-    private void sendRandomMessages(String taskId, ActiveMQRequestDto requestDto, Session session, MessageProducer sender, FormatDefinition formatDefinition, int messageCount) throws JMSException, InterruptedException, JsonProcessingException {
+    private void sendRandomMessages(String taskId, ActiveMQRequestDto requestDto, Session session, MessageProducer sender, FormatDefinition formatDefinition, int messageCount) throws JMSException, InterruptedException, JacksonException {
         TpsPacer pacer = new TpsPacer(requestDto.getTargetTps());
         for (int i = 0; i < messageCount; i++) {
             if (isCancelled(taskId)) return;
@@ -127,7 +126,7 @@ public class ActiveMQRequestLogic {
         }
     }
 
-    private void sendValueMessages(String taskId, ActiveMQRequestDto requestDto, Session session, MessageProducer sender, FormatDefinition formatDefinition, List<String> valueRows, int repeatCount) throws JMSException, InterruptedException, JsonProcessingException {
+    private void sendValueMessages(String taskId, ActiveMQRequestDto requestDto, Session session, MessageProducer sender, FormatDefinition formatDefinition, List<String> valueRows, int repeatCount) throws JMSException, InterruptedException, JacksonException {
         TpsPacer pacer = new TpsPacer(requestDto.getTargetTps());
         int sentIndex = 0;
         for (int repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
@@ -167,7 +166,7 @@ public class ActiveMQRequestLogic {
                 }
             }
             taskExecutionStatusLogic.markSuccess(taskId);
-        } catch (JMSException | IOException e) {
+        } catch (JMSException | IOException | JacksonException e) {
             taskExecutionStatusLogic.markFailed(taskId, e);
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
@@ -221,7 +220,7 @@ public class ActiveMQRequestLogic {
                 }
             }
             taskExecutionStatusLogic.markSuccess(taskId);
-        } catch (JMSException | IOException e) {
+        } catch (JMSException | IOException | JacksonException e) {
             taskExecutionStatusLogic.markFailed(taskId, e);
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
@@ -258,7 +257,7 @@ public class ActiveMQRequestLogic {
     private JsonNode toJsonNode(String json) {
         try {
             return objectMapper.readTree(json);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalArgumentException("Generated message is not valid JSON.", e);
         }
     }
@@ -291,7 +290,7 @@ public class ActiveMQRequestLogic {
         return false;
     }
 
-    private String createStructuredMessage(String tcName, Map<String, String> payload) throws JsonProcessingException {
+    private String createStructuredMessage(String tcName, Map<String, String> payload) throws JacksonException {
         String nowString = nowTimestamp();
         Map<String, Object> dataMap = new LinkedHashMap<>();
         dataMap.put(nowString, payload);
@@ -299,7 +298,7 @@ public class ActiveMQRequestLogic {
         root.put("CREATE_TIMESTAMP", nowString);
         root.put("MESSAGE_ID", tcName);
         root.put("DATA_MAP", dataMap);
-        return objectMapper.writeValueAsString(root);
+        return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
     }
 
     private String createFileMessage(String tcName, String taskId, String fileContents) {
@@ -486,9 +485,9 @@ public class ActiveMQRequestLogic {
         return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
     }
 
-    public String prettyPrintUsingGlobalSetting(String uglyJsonString) throws JsonProcessingException {
+    public String prettyPrintUsingGlobalSetting(String uglyJsonString) throws JacksonException {
         Object jsonObject = objectMapper.readValue(uglyJsonString, Object.class);
-        return objectMapper.writeValueAsString(jsonObject);
+        return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(jsonObject);
     }
 
     private record BrokerSettings(String brokerUrl, String username, String password, String topic) {
