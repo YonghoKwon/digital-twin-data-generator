@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>DT Simulator · 운영 콘솔</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <script type="module" src="/ui/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 이동</a>
+  <aside class="sidebar">
+    <a class="brand" href="#/dashboard"><span class="brand-icon">DT</span><span>Simulator<small>개발 · 테스트 콘솔</small></span></a>
+    <div class="nav-caption">WORKSPACE</div>
+    <nav aria-label="주 메뉴">
+      <a href="#/dashboard"><span aria-hidden="true">◫</span>대시보드</a>
+      <a href="#/publish"><span aria-hidden="true">↗</span>단발 전송</a>
+      <a href="#/streams"><span aria-hidden="true">≋</span>스트림</a>
+      <a href="#/subscriptions"><span aria-hidden="true">⇥</span>구독 모니터</a>
+      <a href="#/mock"><span aria-hidden="true">◇</span>REST Mock</a>
+      <a href="#/scenarios"><span aria-hidden="true">▷</span>시나리오</a>
+      <a href="#/legacy"><span aria-hidden="true">⌘</span>기존 기능</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="local-dot"></span> 같은 서버에 연결됨<a href="/swagger" target="_blank" rel="noopener">Swagger ↗</a></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span>Digital Twin <span class="muted">/ 운영 콘솔</span></span><div class="actions"><span class="muted" id="clock"></span><button id="theme" class="subtle" aria-label="화면 테마 변경">테마: 시스템</button></div></header>
+    <main id="main" tabindex="-1"></main>
+    <footer>DT Simulator <span>로컬 서버 · 모든 시간은 브라우저 기준</span></footer>
+  </div>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <noscript>운영 콘솔을 사용하려면 JavaScript를 활성화하세요.</noscript>
+</body>
+</html>
