@@ -1,0 +1,21 @@
+{
+  "scenarioId": "coil-line-demo",
+  "name": "Coil line demo",
+  "description": "Sensor changes, alarm marks and REST status changes in six seconds.",
+  "speed": 1.0,
+  "loop": false,
+  "onDisconnect": "WAIT",
+  "defaults": {"topic": "dt.coil.sensor", "messageId": "COIL_SENSOR", "standardHeaders": true},
+  "events": [
+    {"at": 0, "type": "MOCK_UPDATE", "routeId": "coil-status", "route": {"id": "coil-status", "method": "GET", "path": "/coil/status", "body": "{\"status\":\"IDLE\"}", "headers": {"Content-Type": "application/json"}}},
+    {"at": 0, "payload": {"seq": "{{seq}}", "temperature": "{{walk:25:20..30:0.5}}", "status": "{{cycle:IDLE|RUN|RUN|WARN}}"}, "repeat": {"count": 11, "everyMs": 500}},
+    {"at": "00:00:01.000", "type": "MARK", "label": "Line running"},
+    {"at": 1000, "type": "MOCK_UPDATE", "routeId": "coil-status", "route": {"id": "coil-status", "method": "GET", "path": "/coil/status", "body": "{\"status\":\"RUN\"}", "headers": {"Content-Type": "application/json"}}},
+    {"at": 3000, "topic": "dt.coil.alarm", "messageId": "COIL_ALARM", "payload": {"severity": "WARN", "code": "TEMP_HIGH"}},
+    {"at": 3000, "type": "MARK", "label": "Temperature warning"},
+    {"at": 3500, "type": "MOCK_DISABLE", "routeId": "coil-status"},
+    {"at": 4000, "type": "MOCK_ENABLE", "routeId": "coil-status"},
+    {"at": 5000, "type": "MOCK_UPDATE", "routeId": "coil-status", "route": {"id": "coil-status", "method": "GET", "path": "/coil/status", "body": "{\"status\":\"COMPLETED\"}", "headers": {"Content-Type": "application/json"}}},
+    {"at": 6000, "type": "MARK", "label": "Demo complete"}
+  ]
+}

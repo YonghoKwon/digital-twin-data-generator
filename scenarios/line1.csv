@@ -1,0 +1,5 @@
+offsetMs,topic,messageId,temperature,status,note
+0,dt.line1.sensor,LINE1,20.0,IDLE,"line ready, waiting"
+1000,dt.line1.sensor,LINE1,22.5,RUN,"coil ""C1"" started"
+2000,dt.line1.sensor,LINE1,29.0,WARN,temperature warning
+3000,dt.line1.sensor,LINE1,24.0,RUN,temperature recovered
