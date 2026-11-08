@@ -598,6 +598,7 @@ OK,20.1
 ```
 
 헤더/순서 매핑, quoted CSV, 날짜 정규화, JSON 문자열 escape, base-dir/실제 경로 제한은 기존 파일 규칙과 같습니다.
+`logic.FileDataTemplate`을 기존 전송/dry-run과 실시간 소스가 공유하며 S1 출력 바이트와 검증 오류 메시지를 유지합니다.
 행을 순서대로 보내며 loop는 기본 true, false이면 마지막 행 후 COMPLETED입니다. 파일은 생성 시 한 번 읽고 전체 행을 검증합니다.
 파일 행은 기존과 같이 리터럴 데이터이며 값 생성 토큰을 확장하지 않습니다. 기존 EAI 부가 필드는 넣지 않고 실시간 envelope를 사용합니다.
 PATCH payload는 파일 소스를 단일 payload 반복으로 교체합니다.

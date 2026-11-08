@@ -600,7 +600,8 @@ Content-Type: application/json
 
 {"paused":false,"payload":{"temperature":25.0,"status":"UPDATED"}}
 
-### FILE_DATA 스트림 (기존 파일 규칙, loop=false이면 마지막 행 후 COMPLETED)
+### FILE_DATA 스트림 (S1과 FileDataTemplate 규칙 공유: CSV/헤더/날짜/BOM/주석/경로/JSON escape)
+### loop=false이면 마지막 행 후 COMPLETED, 파일 값은 토큰 확장 없이 리터럴 유지
 POST {{host}}/dt/streams
 Content-Type: application/json
 

@@ -360,7 +360,8 @@ FILE_DATA 스트림은 payload 대신 다음 source를 사용합니다:
 ```
 
 기존 header/순서/quoted CSV·날짜 정규화·JSON escape·base-dir/실제 경로 제한을 따릅니다. 행을 순서대로 보내고 loop=false이면 마지막 행에서 COMPLETED입니다.
-기존 private 파일 로직은 변경하지 않고 realtime 어댑터와 S1 비교 테스트로 계약을 유지합니다. 파일은 생성 요청 시 읽고 검증하며 PATCH payload는 파일 소스를 단일 payload 반복으로 교체합니다.
+`logic.FileDataTemplate`에 S1의 파일 읽기·placeholder·CSV·헤더 매핑·날짜 정규화·경로 제한·JSON escape 규칙을 모아 `ActiveMQRequestLogic`과 `RealtimeFileSource`가 공유합니다. 기존 전송/dry-run 바이트와 S1 오류 메시지를 유지합니다.
+파일은 생성 요청 시 읽고 검증하며 PATCH payload는 파일 소스를 단일 payload 반복으로 교체합니다.
 파일 행의 값은 리터럴로 유지하여 값 생성 토큰을 확장하지 않으며 기존 EAI 부가 필드 대신 실시간 envelope를 사용합니다.
 
 스트림별 가상 스레드 한 개와 독립 발행 scope를 사용합니다. 첫 발행은 즉시이며 절대 시각 pacing으로 지연 누적을 피하고 밀림 시 따라잡기 없이 기준을 재설정해 lagResets를 증가시킵니다.
