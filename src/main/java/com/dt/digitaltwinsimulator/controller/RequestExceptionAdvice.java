@@ -2,6 +2,7 @@ package com.dt.digitaltwinsimulator.controller;
 
 import com.dt.digitaltwinsimulator.broker.BrokerConnectionException;
 import com.dt.digitaltwinsimulator.logic.DuplicateTaskException;
+import com.dt.digitaltwinsimulator.logic.SensitiveLogMasker;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -11,11 +12,19 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.io.IOException;
 import java.util.Map;
 
-@RestControllerAdvice(assignableTypes = ActiveMQRequestController.class)
+// controller 패키지의 모든 API(전송·Task 등)에 같은 오류 형식을 적용한다. REST Mock은 자체 handler를 쓴다.
+@RestControllerAdvice(basePackageClasses = ActiveMQRequestController.class)
 public class RequestExceptionAdvice {
-    @ExceptionHandler({IllegalArgumentException.class, IOException.class})
-    public ResponseEntity<Map<String, String>> invalidInput(Exception e) {
-        return error(400, "INVALID_REQUEST", "Invalid input or file content.");
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> invalidInput(IllegalArgumentException e) {
+        // 검증 메시지는 어떤 파일·행·필드를 고쳐야 하는지 알려주므로 그대로 돌려준다.
+        String message = e.getMessage() == null || e.getMessage().isBlank() ? "Invalid input." : e.getMessage();
+        return error(400, "INVALID_REQUEST", SensitiveLogMasker.mask(message));
+    }
+
+    @ExceptionHandler(IOException.class)
+    public ResponseEntity<Map<String, String>> unreadableFile(IOException e) {
+        return error(400, "INVALID_REQUEST", "File is missing or unreadable.");
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})

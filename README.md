@@ -83,7 +83,7 @@ dry-run은 브로커에 연결하지 않습니다.
 | 502 | `BROKER_CONNECTION_FAILED` | 사전 브로커 연결·인증 실패 |
 | 409 | `DUPLICATE_TASK_ID` | 실행 중인 ID로 JmsTemplate 부하 테스트 요청 |
 
-오류 응답은 `{"error":"INVALID_REQUEST","message":"Invalid input or file content."}` 형식입니다.
+오류 응답은 `{"error":"INVALID_REQUEST","message":"<원인>"}` 형식입니다. 400의 `message`에는 고쳐야 할 원인(예: `File path is outside the allowed base directory.`, `데이터 row의 컬럼 수가 ...`)이 들어갑니다(민감값은 마스킹).
 성공 응답 문자열 `success : Started 1 tasks with base ID sample-random-1`은 유지합니다.
 일반 전송 ID에는 기존 UUID suffix가 붙으며, 실행 중인 JmsTemplate taskId는 원자적으로 중복을 차단합니다.
 dry-run과 `LoadTestResultDto` 응답 구조는 유지합니다.

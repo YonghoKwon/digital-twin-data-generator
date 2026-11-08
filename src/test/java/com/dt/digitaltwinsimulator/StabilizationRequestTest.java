@@ -93,7 +93,8 @@ class StabilizationRequestTest {
             body.put("filePath", directory);
             mvc.perform(post("/activemq/request/file/path").contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"));
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("outside the allowed base directory")));
         }
         var body = request("/file");
         body.put("fileName", "missing.json");

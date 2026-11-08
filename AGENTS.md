@@ -113,7 +113,7 @@ JmsTemplate 요청도 `activeMQIp`, `id`, `pw`, `topic` override를 지원하며
 - 발행 scope는 task별 connection/session cache를 닫습니다. headers는 JMS string property로 설정합니다.
 - 비동기 전송 3종은 요청 스레드에서 입력 검증·파일 읽기·dry-run 1건 JSON 검증 후 connect/start/close를 확인합니다.
 - 입력/파일/JSON 오류는 400, 브로커 연결 실패는 502, 실행 중인 JmsTemplate taskId 중복은 409입니다.
-- 오류 JSON은 `{"error","message"}`이며 error 값은 `INVALID_REQUEST`, `BROKER_CONNECTION_FAILED`, `DUPLICATE_TASK_ID`입니다.
+- 오류 JSON은 `{"error","message"}`이며(400 message는 검증 실패 원인, controller 패키지 전체에 적용) error 값은 `INVALID_REQUEST`, `BROKER_CONNECTION_FAILED`, `DUPLICATE_TASK_ID`입니다.
 - 성공 문자열, API path, dry-run 및 LoadTestResultDto 구조는 유지합니다. 이후 행에서 생성이 실패하면 task를 FAILED로 처리합니다.
 
 ```properties
