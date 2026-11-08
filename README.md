@@ -2,6 +2,14 @@
 
 REST API 요청으로 특정 포맷의 데이터를 대량 생성한 뒤 ActiveMQ Artemis Topic으로 전송하는 시뮬레이터입니다.
 
+| 주요 API | 기능 |
+| --- | --- |
+| `POST /activemq/request/{taskId}` | 기존 format/value 대량 전송 |
+| `POST /activemq/request/file/{taskId}`, `POST /activemq/request/file-data/{taskId}` | 기존 파일 전송 |
+| `POST /activemq/request/jms-template-load/{taskId}` | JmsTemplate 부하 테스트 |
+| `POST /dt/publish`, `POST /dt/publish/preview` | 실시간 단발 전송 / 생성 미리보기 |
+| `POST/GET/DELETE /dt/streams`, `GET/PATCH/DELETE /dt/streams/{id}` | 실시간 스트림 생성·조회·변경·중지 |
+
 ## 실행 환경
 
 - Java 21
@@ -462,6 +470,162 @@ Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용합니다. 설치된 M
 경로 제한, JSON escape/전송 전 검증, 400/502/409, EAI 기본 출력 바이트, typedValues를 포함합니다.
 Windows에서 symlink 생성 권한이 없으면 해당 테스트만 Assumptions로 skip하며 사유를 결과에 기록합니다.
 CI는 GitHub Actions에서 Java 21 기준으로 `mvn -B test`를 수행합니다.
+
+## 실시간 전송
+
+Swagger의 `Realtime` 태그에서 JSON 단발 발행과 여러 지속 스트림을 제어합니다. `topic`, `activeMQIp`, `id`, `pw`는 생략/공백이면 서버 브로커 기본값을 사용합니다.
+
+| method | path | 동작 |
+| --- | --- | --- |
+| POST | `/dt/publish` | 동기 발행, `count=1`, `intervalMs=0` 기본 |
+| POST | `/dt/publish/preview` | 브로커 연결 없이 생성, count 1~10 |
+| POST | `/dt/streams` | 생성, 201 + 상태 |
+| GET | `/dt/streams`, `/dt/streams/{id}` | 전체/개별 상태 조회 |
+| PATCH | `/dt/streams/{id}` | `rateTps`, `paused`, `payload` 변경 |
+| DELETE | `/dt/streams/{id}`, `/dt/streams` | 개별/전체 중지, 상태 보존 |
+
+단발 한 건 (`POST /dt/publish`):
+
+```json
+{
+  "topic": "topic.sensor",
+  "messageId": "SENSOR",
+  "payload": {"temperature": 23.5, "status": "OK"},
+  "standardHeaders": true
+}
+```
+
+`count`를 주면 여러 건을 순서대로 보내며 `intervalMs`는 각 발행 사이 대기 시간입니다.
+성공 응답은 `{"sent":1,"failed":0,"elapsedMillis":12,"topic":"topic.sensor","firstMessage":{...}}`입니다.
+count만큼 메시지를 먼저 생성하므로 입력/토큰 오류는 전송 없이 400 `INVALID_REQUEST`와 원인 메시지를 반환합니다. 시각/UUID/walk 값도 이 사전 생성 시점에 결정됩니다.
+첫 전송 전 브로커 연결·발행 오류는 기존 `{"error","message"}` JSON과 502를 반환합니다.
+1건 이상 성공한 뒤 브로커 오류가 나면 `{"sent":2,"failed":1,"stoppedReason":"BROKER_ERROR","elapsedMillis":12,"topic":"topic.sensor","firstMessage":{...}}`와 **207**을 반환하고 남은 발행을 중단합니다.
+207은 일부 발행 완료를 HTTP 상태와 누적 결과로 함께 알리기 위한 선택입니다. 이미 보낸 메시지는 취소되지 않으며, 요청 전체를 다시 보내면 중복될 수 있습니다. 완전 성공은 기존 200과 결과 구조를 유지합니다.
+preview는 같은 요청으로 `{"count":1,"topic":"topic.sensor","messages":[{...}]}`를 반환하며 intervalMs 대기를 하지 않습니다.
+
+기본 `envelope="DTCORE"`는 object payload와 messageId를 요구하며 다음 envelope를 만듭니다. 두 시각 문자열은 같습니다.
+
+```json
+{"CREATE_TIMESTAMP":"20261108120000000","MESSAGE_ID":"SENSOR","DATA_MAP":{"20261108120000000":{"temperature":23.5,"status":"OK"}}}
+```
+
+`envelope="RAW"`는 임의 JSON을 그대로 직렬화하며, 문자열 payload는 JSON 따옴표 없는 문자열 본문으로 보냅니다. messageId는 RAW에서 선택입니다.
+`headers`는 문자열 map입니다. `standardHeaders=true`는 schema version(기본 `1`), 메시지별 UUID, UTC ISO-8601 발행 시각을 추가합니다.
+**DTCore 규약 `dx-*`는 Artemis 2.44.0 JMS 제약(AMQ139012)으로 `dx_*`로 전달됩니다.** S4에서 `_` 이름이 STOMP 헤더로 그대로 전달됨을 확인했습니다.
+
+| 채널 규약 이름 / API headers 입력 | 실제 JMS string property |
+| --- | --- |
+| `dx-schema-version` | `dx_schema_version` |
+| `dx-message-id` | `dx_message_id` |
+| `dx-sent-at` | `dx_sent_at` |
+
+사용자 headers의 위 세 이름도 같은 규칙으로 변환합니다. 나머지 이름은 JMS Java 식별자(예약어와 JMS 접두사 제외)여야 합니다.
+표준 헤더를 사용자 값으로 덮어쓰거나 변환 후 이름이 충돌하면 400입니다. DTCore 수신 측도 위 `_` 이름을 사용해야 합니다. 이 작업의 테스트는 fake publisher를 사용합니다.
+
+센서처럼 매초 부드럽게 바뀌는 값 (`POST /dt/streams`):
+
+```json
+{
+  "streamId": "sensor-1",
+  "topic": "topic.sensor",
+  "messageId": "SENSOR",
+  "standardHeaders": true,
+  "rateTps": 1,
+  "durationSec": 0,
+  "maxMessages": 0,
+  "startPaused": false,
+  "payload": {
+    "seq": "{{seq}}",
+    "temperature": "{{walk:20:10..30:0.5}}",
+    "status": "{{cycle:OK|OK|WARN}}"
+  }
+}
+```
+
+`streamId` 생략 시 UUID를 생성합니다. id는 영문/숫자/`_.-`로 1~128자입니다.
+첫 메시지는 즉시 보냅니다. rateTps는 양의 실수이며 `0.2`는 5초 간격입니다. durationSec/maxMessages의 0은 무한입니다.
+durationSec는 일시정지와 재연결 시간을 포함한 경과 초, maxMessages는 성공 전송 수입니다.
+같은 id 실행 중이면 409 `DUPLICATE_TASK_ID`, 최대 동시 수 초과는 429 `STREAM_LIMIT_EXCEEDED`, 없는 id는 404 `STREAM_NOT_FOUND`입니다.
+
+`PATCH /dt/streams/sensor-1` 예시:
+
+```json
+{"rateTps":10}
+```
+
+```json
+{"paused":true}
+```
+
+```json
+{"paused":false,"payload":{"temperature":"{{walk:25:15..35:0.2}}","seq":"{{seq}}"}}
+```
+
+변경은 다음 메시지부터 적용됩니다. 이미 진행 중인 발행 한 건은 완료될 수 있습니다. payload 교체는 walk 상태를 초기화하며 seq는 계속 증가합니다.
+rate만 변경하면 다음 전송 시각은 **마지막 성공 전송 시각 + 새 주기**이며 이미 지났으면 now입니다. 예를 들어 0.2 → 0.1 TPS로 낮추면 직전 전송에서 10초가 지난 시점까지 기다립니다.
+pause는 추가 발행을 만들지 않으며 실제 pause→resume 시 now부터 한 건을 허용합니다. 이미 실행 중일 때 paused=false를 반복해도 예약을 앞당기지 않습니다.
+payload만 교체하면 예약 시각을 유지합니다. 발행 도중 rate가 바뀌면 그 발행 완료 시각부터 새 주기를 적용합니다.
+종료된 스트림을 PATCH하면 409 `STREAM_NOT_ACTIVE`입니다. `DELETE /dt/streams/sensor-1`로 중지합니다.
+
+| payload 문자열 값 토큰 | 결과 |
+| --- | --- |
+| `{{seq}}` | 성공 전송 기준 1부터 정수 |
+| `{{now}}`, `{{now:yyyy-MM-dd'T'HH:mm:ss}}` | 기본 yyyyMMddHHmmssSSS / 지정 DateTimeFormatter 패턴 문자열 |
+| `{{uuid}}` | UUID 문자열 |
+| `{{random:Integer:1..10}}`, `{{random:Double:1.5..2.5}}`, `{{random:Boolean:}}` | JSON number/boolean; 조건은 기존 RandomValueGenerator 문법 |
+| `{{random:String:8}}`, `{{random:Date:yyyyMMdd}}` | 문자열 |
+| `{{walk:20:10..30:0.5}}` | 첫 값 20, 범위 10~30, 직전 성공 값에서 최대 ±0.5 변화하는 실수 |
+| `{{cycle:A|B|C}}`, `{{pick:A|B|C}}` | seq 순서 반복 / 무작위 선택 문자열 |
+
+객체·배열에 재귀 적용합니다. 값 전체가 토큰이면 타입을 유지하고 `"sensor-{{seq}}"` 같은 일부 토큰은 문자열로 치환합니다.
+알 수 없거나 잘못된 토큰은 요청 시 400입니다. 시각 토큰과 envelope 시각은 서버 로컬 시간이며 dx_sent_at만 UTC입니다.
+
+FILE_DATA 스트림 (`POST /dt/streams`, payload 대신 source):
+
+```json
+{
+  "streamId": "file-1",
+  "topic": "topic.sensor",
+  "messageId": "SENSOR",
+  "rateTps": 1,
+  "source": {"type":"FILE_DATA","filePath":".","formatFileName":"format.txt","dataFileName":"data.csv","loop":true}
+}
+```
+
+`format.txt` 예시: `"temperature":{{temperature}},"status":"{{status}}"`
+
+```csv
+status,temperature
+OK,20.1
+"WARN, check",20.2
+```
+
+헤더/순서 매핑, quoted CSV, 날짜 정규화, JSON 문자열 escape, base-dir/실제 경로 제한은 기존 파일 규칙과 같습니다.
+`logic.FileDataTemplate`을 기존 전송/dry-run과 실시간 소스가 공유하며 S1 출력 바이트와 검증 오류 메시지를 유지합니다.
+행을 순서대로 보내며 loop는 기본 true, false이면 마지막 행 후 COMPLETED입니다. 파일은 생성 시 한 번 읽고 전체 행을 검증합니다.
+파일 행은 기존과 같이 리터럴 데이터이며 값 생성 토큰을 확장하지 않습니다. 기존 EAI 부가 필드는 넣지 않고 실시간 envelope를 사용합니다.
+PATCH payload는 파일 소스를 단일 payload 반복으로 교체합니다.
+
+스트림 상태는 다음 필드를 반환합니다:
+`streamId,state,topic,messageId,rateTps,sent,failed,actualTps,startedAt,lastSentAt,lastError,elapsedMillis,lagResets,skippedWhileDisconnected`.
+state는 RUNNING/PAUSED/RECONNECTING/COMPLETED/STOPPED/FAILED입니다. actualTps는 최근 10초 성공 수를 관측 시간으로 나눈 이동 평균이며 시작 후 10초 미만이면 경과 시간을 사용합니다.
+브로커 오류는 스트림을 RECONNECTING으로 전환하고 1·2·4·8·16·30초 백오프로 재연결합니다. 성공하면 RUNNING(일시정지 중이면 PAUSED)으로 돌아옵니다.
+failed는 실제 연결/발행 실패 시도 수, skippedWhileDisconnected는 단절 동안 생략한 예약 수이며 일시정지 시간은 제외합니다.
+lastError에는 자격 정보나 공급자 오류 상세를 넣지 않습니다. 단절 중 예약을 쌓지 않으며 브로커 발행 결과가 불명확하면 중복 수신 가능성은 있습니다.
+
+스트림별 가상 스레드와 독립 JMS scope를 사용합니다. 절대 시각 pacing으로 드리프트를 피하고 속도 변경 시 마지막 성공 전송에 새 주기를 적용합니다.
+느린 발행으로 다음 예약을 놓치면 lagResets를 증가시키고 다음 주기로 기준을 재설정하므로 밀린 메시지를 한꺼번에 보내지 않습니다.
+종료된 스트림은 최근 100개만 메모리에 남습니다. DELETE 후 진행 중인 네트워크 정리는 공통 브로커 timeout에 따라 이어지며 앱 종료 시 모든 스트림 scope를 정리합니다.
+
+```properties
+simulator.realtime.schema-version=1
+simulator.realtime.max-publish-count=1000
+simulator.realtime.max-rate-tps=5000
+simulator.realtime.max-streams=50
+```
+
+신규 테스트는 fake publisher와 닫힌 포트로 실행합니다. 100 TPS × 2초는 180~220건(±10%)을 기준으로 검증합니다.
+실제 브로커·UE 수신을 필요로 하는 검증은 별도 통합 범위입니다.
 
 ## REST Mock
 
