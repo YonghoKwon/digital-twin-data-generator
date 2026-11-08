@@ -103,8 +103,24 @@ export async function copyText(value) {
   try { await navigator.clipboard.writeText(value); toast('복사했습니다.'); }
   catch { throw new Error(`복사할 내용을 선택해 직접 복사하세요.\n${value}`); }
 }
-export function table(headers, rows) {
-  return el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, headers.map(x => el('th', { scope: 'col' }, x)))), el('tbody', {}, rows.map(row => el('tr', {}, row.map(cell => el('td', {}, cell)))))));
+export function table(headers, rows, onSelect) {
+  const body = el('tbody');
+  rows.forEach((row, index) => {
+    const node = el('tr', {}, row.map(cell => el('td', {}, cell)));
+    if (onSelect) {
+      node.tabIndex = 0; node.classList.add('selectable-row');
+      const select = () => {
+        for (const sibling of body.children) sibling.setAttribute('aria-selected', String(sibling === node));
+        onSelect(index);
+      };
+      node.addEventListener('click', event => { if (!event.target.closest('button,input,a')) select(); });
+      node.addEventListener('keydown', event => { if (event.target === node && ['Enter', ' '].includes(event.key)) { event.preventDefault(); select(); } });
+    }
+    if (node.querySelector('.state.alarm')) node.classList.add('alarm-row');
+    if (node.querySelector('.state.warn')) node.classList.add('warn-row');
+    body.append(node);
+  });
+  return el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, headers.map(x => el('th', { scope: 'col' }, x)))), body));
 }
 export function numeric(input, label, min = 0, max = Infinity) {
   const raw = input.value;

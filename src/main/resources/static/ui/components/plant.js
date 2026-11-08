@@ -54,7 +54,7 @@ export function startStatus(scope) {
     ];
     const msgRate = plant.subscriptions.reduce((sum, x) => sum + rate.sample(x.subscriptionId, x.receivedCount), 0);
     const runs = plant.runs.filter(x => active(x.state));
-    const brokerButton = button(b ? `${b.defaultTarget === 'EMBEDDED' ? '내장' : '외부'} ${b.version || ''} ${b.websocketUrl || ''}` : '브로커 확인 중', () => void copyText(websocketAddress()).catch(error => toast(error.message, true)));
+    const brokerButton = button(b ? `${b.defaultTarget === 'EMBEDDED' ? '내장' : '외부 기본 / 내장 WS 설정'} ${b.version || ''} ${b.websocketUrl || ''}` : '브로커 확인 중', () => void copyText(websocketAddress()).catch(error => toast(error.message, true)));
     brokerButton.setAttribute('aria-label', `브로커 주소 복사 ${b?.websocketUrl || ''}`);
     holder.replaceChildren(
       ...alarms.slice(0, 1).map(alarm => button(`${alarm.label}${alarms.length > 1 ? ` 외 ${alarms.length - 1}` : ''}`, () => { location.hash = `#/${alarm.route}`; }, 'alarm-cell')),

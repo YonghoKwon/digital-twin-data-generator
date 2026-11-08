@@ -6,7 +6,9 @@ import { request } from '../api.js';
 
 export const destinations = [ ['dashboard', '개요'], ['publish', '보내기'], ['streams', '스트림'], ['subscriptions', '수신'], ['mock', 'REST'], ['scenarios', '시나리오'], ['legacy', '기존'] ];
 function go(route, intent) {
-  location.hash = `#/${route}${intent ? `?action=${intent}` : ''}`;
+  const target = `#/${route}${intent ? `?action=${intent}` : ''}`;
+  if (location.hash === target && intent) document.getElementById('main').querySelector('input')?.focus();
+  else location.hash = target;
   if (!intent) document.getElementById('main').focus();
 }
 export function shortcuts() {
@@ -66,8 +68,8 @@ export function installShortcuts() {
     const editing = event.target.closest('input,textarea,select,[contenteditable="true"]');
     const modal = document.querySelector('dialog[open]');
     if (event.ctrlKey && event.key === 'Enter' && !modal) {
-      const group = event.target.closest('[data-primary-group]') || document.getElementById('main');
-      const control = group.querySelector('[data-primary]');
+      const group = event.target.closest('[data-primary-group]');
+      const control = group?.querySelector('[data-primary]');
       if (control && !control.disabled) { event.preventDefault(); control.click(); }
       return;
     }

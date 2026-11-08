@@ -1,5 +1,5 @@
 import { segment, request } from '../api.js';
-import { el, page, panel, badge, field, table, errorBox, actionButton, copyText, help, toast } from '../components/ui.js';
+import { el, page, panel, badge, field, table, errorBox, actionButton, copyText, help, toast, primaryAction } from '../components/ui.js';
 import { plant } from '../components/plant.js';
 
 export default function dashboard(root, scope) {
@@ -40,6 +40,7 @@ export default function dashboard(root, scope) {
     panel('1 브로커 실행 확인', broker), panel('2 UE 구독자 수', consumers),
     panel('3 테스트 메시지 왕복', topic.node, ping, pingResult), panel('UE DTCoreSettings', settings)),
     panel('실행 중 항목', running));
+  primaryAction(ping.closest('fieldset'), ping);
   function render() {
     if (!scope.alive) return;
     const b = plant.broker;
@@ -47,7 +48,7 @@ export default function dashboard(root, scope) {
     consumers.replaceChildren(b?.running ? table(['Address', '구독자', '대기 메시지'], (b.addresses || []).map(x => [x.name, x.consumerCount, x.messageCount])) : help('외부 브로커의 구독자 수는 조회 API에서 제공하지 않습니다.'));
     consumers.append(help('구독자 수에 시뮬레이터 구독이 포함됩니다.'));
     const text = `WebSocketUrl=${b?.websocketUrl || '확인 중'}\nTestApiUrl=${location.origin}/mock`;
-    settings.replaceChildren(el('div', { class: 'settings-block' }, text), actionButton('DTCoreSettings 복사', errors, () => copyText(text)), help('다른 PC에서는 호스트를 서버 PC의 IP로 입력하세요.'));
+    settings.replaceChildren(el('div', { class: 'settings-block' }, text), actionButton('DTCoreSettings 복사', errors, () => copyText(text)), help('다른 PC에서는 호스트를 서버 PC의 IP로 입력하세요. WebSocketUrl은 내장 브로커 설정값입니다.'));
     const rows = [
       ...plant.streams.filter(x => ['RUNNING', 'PAUSED', 'RECONNECTING'].includes(x.state)).map(x => ['스트림', x.streamId, badge(x.state), x.topic, x.sent]),
       ...plant.subscriptions.map(x => ['구독', x.subscriptionId, badge(x.status), x.topic, x.receivedCount]),

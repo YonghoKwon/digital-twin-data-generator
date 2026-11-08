@@ -47,7 +47,12 @@ export default function streams(root, scope) {
     const slider = el('input', { type: 'range', min: 0.1, max: 5000, step: 0.1, value: stream.rateTps, 'aria-label': `${stream.streamId} 전송 속도` });
     let dirty = false;
     const url = `/dt/streams/${segment(stream.streamId)}`;
-    const patch = async body => { await scope.request(url, { method: 'PATCH', body }); await refresh(); };
+    const patch = async body => {
+      await scope.request(url, { method: 'PATCH', body });
+      const messages = { paused: body.paused ? '스트림을 일시정지했습니다.' : '스트림을 재개했습니다.', payload: 'Payload를 교체했습니다.', rateTps: '속도를 적용했습니다.' };
+      toast(`${messages[Object.keys(body)[0]]} ${stream.streamId}`);
+      await refresh();
+    };
     const apply = actionButton('속도 적용', localErrors, async () => { await patch({ rateTps: numeric(rate, 'rateTps', Number.MIN_VALUE, 5000) }); dirty = false; }, 'small');
     rate.input.addEventListener('input', () => { dirty = true; slider.value = rate.value; });
     rate.input.addEventListener('change', () => apply.click());
@@ -69,6 +74,7 @@ export default function streams(root, scope) {
       el('div', { class: 'row' }, el('div', { class: 'grow' }, slider), rate.node, apply, speedButtons), el('div', { class: 'actions' }, pause, stop, actionButton('복제', localErrors, async () => duplicate(current), 'small')),
       el('details', {}, el('summary', {}, 'Payload 교체   다음 메시지부터 적용'), help('FILE_DATA 소스도 단일 Payload 반복으로 교체됩니다. walk 상태가 초기화됩니다.'), editor.node, tokenHelp(editor), replace), localErrors.node, lastError);
     let current = stream;
+    primaryAction(node, apply); primaryAction(editor.node.parentElement, replace);
     return { node, update(value) {
       current = value; state.replaceChildren(badge(value.state));
       node.classList.toggle('selected', readState('selected-stream') === value.streamId);

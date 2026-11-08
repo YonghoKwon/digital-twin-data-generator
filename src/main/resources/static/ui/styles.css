@@ -127,3 +127,6 @@ dialog::backdrop { background:rgb(0 0 0 / 35%); }
 input[type="number"],input[list],table { font-family:var(--din); }
 .status-strip>.actions { flex-wrap:nowrap; flex:none; margin-left:auto; }
 .error,.error-toast,.invalid .editor-status,.validation-error,button.danger,.plant-status .alarm-cell { color:color-mix(in srgb,var(--alarm) 50%,var(--ink)); }
+.selectable-row { cursor:pointer; }
+.selectable-row[aria-selected="true"] { outline:1px solid var(--act); outline-offset:-1px; }
+::placeholder { color:color-mix(in srgb,var(--dim) 85%,var(--ink)); opacity:1; }
