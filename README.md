@@ -562,6 +562,9 @@ durationSec는 일시정지와 재연결 시간을 포함한 경과 초, maxMess
 ```
 
 변경은 다음 메시지부터 적용됩니다. 이미 진행 중인 발행 한 건은 완료될 수 있습니다. payload 교체는 walk 상태를 초기화하며 seq는 계속 증가합니다.
+rate만 변경하면 다음 전송 시각은 **마지막 성공 전송 시각 + 새 주기**이며 이미 지났으면 now입니다. 예를 들어 0.2 → 0.1 TPS로 낮추면 직전 전송에서 10초가 지난 시점까지 기다립니다.
+pause는 추가 발행을 만들지 않으며 실제 pause→resume 시 now부터 한 건을 허용합니다. 이미 실행 중일 때 paused=false를 반복해도 예약을 앞당기지 않습니다.
+payload만 교체하면 예약 시각을 유지합니다. 발행 도중 rate가 바뀌면 그 발행 완료 시각부터 새 주기를 적용합니다.
 종료된 스트림을 PATCH하면 409 `STREAM_NOT_ACTIVE`입니다. `DELETE /dt/streams/sensor-1`로 중지합니다.
 
 | payload 문자열 값 토큰 | 결과 |
@@ -610,7 +613,7 @@ state는 RUNNING/PAUSED/RECONNECTING/COMPLETED/STOPPED/FAILED입니다. actualTp
 failed는 실제 연결/발행 실패 시도 수, skippedWhileDisconnected는 단절 동안 생략한 예약 수이며 일시정지 시간은 제외합니다.
 lastError에는 자격 정보나 공급자 오류 상세를 넣지 않습니다. 단절 중 예약을 쌓지 않으며 브로커 발행 결과가 불명확하면 중복 수신 가능성은 있습니다.
 
-스트림별 가상 스레드와 독립 JMS scope를 사용합니다. 절대 시각 pacing으로 드리프트를 피하고 속도 변경 시 기준을 재설정합니다.
+스트림별 가상 스레드와 독립 JMS scope를 사용합니다. 절대 시각 pacing으로 드리프트를 피하고 속도 변경 시 마지막 성공 전송에 새 주기를 적용합니다.
 느린 발행으로 다음 예약을 놓치면 lagResets를 증가시키고 다음 주기로 기준을 재설정하므로 밀린 메시지를 한꺼번에 보내지 않습니다.
 종료된 스트림은 최근 100개만 메모리에 남습니다. DELETE 후 진행 중인 네트워크 정리는 공통 브로커 timeout에 따라 이어지며 앱 종료 시 모든 스트림 scope를 정리합니다.
 

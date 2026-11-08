@@ -186,6 +186,71 @@ class RealtimeServiceTest {
     }
 
     @Test
+    void slowingFractionalRateDoesNotSendImmediatelyAfterPatch() throws Exception {
+        var request = request("slower"); request.setRateTps(0.2);
+        service.create(request);
+        await(() -> service.get("slower").sent() == 1, 1000);
+        service.patch("slower", new RealtimeResponses.Patch(0.1, null, null));
+        Thread.sleep(250);
+        assertThat(service.get("slower").sent()).isEqualTo(1);
+    }
+
+    @Test
+    void rateChangeSchedulesFromLastSuccessfulSendRatherThanPatchTime() throws Exception {
+        var request = request("rate-anchor"); request.setRateTps(0.2);
+        service.create(request);
+        await(() -> service.get("rate-anchor").sent() == 1, 1000);
+        Thread.sleep(400);
+        service.patch("rate-anchor", new RealtimeResponses.Patch(1d, null, null));
+        await(() -> service.get("rate-anchor").sent() == 2, 1500);
+        long gap = publisher.times.get(1) - publisher.times.get(0);
+        assertThat(gap).isBetween(980_000_000L, 1_250_000_000L);
+    }
+
+    @Test
+    void payloadReplacementKeepsScheduleAndAnUnpausedPatchDoesNotSend() throws Exception {
+        var request = request("payload-schedule"); request.setRateTps(2);
+        service.create(request);
+        await(() -> service.get("payload-schedule").sent() == 1, 1000);
+        Thread.sleep(150);
+        service.patch("payload-schedule", new RealtimeResponses.Patch(null, null, mapper.readTree("{\"updated\":true}")));
+        service.patch("payload-schedule", new RealtimeResponses.Patch(null, false, null));
+        await(() -> service.get("payload-schedule").sent() >= 2, 1000);
+        long gap = publisher.times.get(1) - publisher.times.get(0);
+        assertThat(gap).isBetween(480_000_000L, 625_000_000L);
+        assertThat(publisher.bodies.get(1)).contains("updated");
+    }
+
+    @Test
+    void pauseDoesNotSendAndResumeSendsOneImmediatelyThenWaitsForPeriod() throws Exception {
+        var request = request("resume-schedule"); request.setRateTps(0.2);
+        service.create(request);
+        await(() -> service.get("resume-schedule").sent() == 1, 1000);
+        service.patch("resume-schedule", new RealtimeResponses.Patch(null, true, null));
+        Thread.sleep(150);
+        assertThat(service.get("resume-schedule").sent()).isEqualTo(1);
+        long resumed = System.nanoTime();
+        service.patch("resume-schedule", new RealtimeResponses.Patch(null, false, null));
+        await(() -> service.get("resume-schedule").sent() == 2, 1000);
+        assertThat(publisher.times.get(1) - resumed).isLessThan(250_000_000L);
+        Thread.sleep(150);
+        assertThat(service.get("resume-schedule").sent()).isEqualTo(2);
+    }
+
+    @Test
+    void ratePatchDuringPublicationWaitsForNewPeriodAfterItsCompletion() throws Exception {
+        publisher.delayMs = 200;
+        var request = request("inflight-rate"); request.setRateTps(100);
+        service.create(request);
+        await(() -> publisher.attemptTimes.size() == 1, 1000);
+        service.patch("inflight-rate", new RealtimeResponses.Patch(0.1, null, null));
+        await(() -> service.get("inflight-rate").sent() == 1, 1000);
+        Thread.sleep(250);
+        assertThat(publisher.attemptTimes).hasSize(1);
+        assertThat(service.get("inflight-rate").sent()).isEqualTo(1);
+    }
+
+    @Test
     void slowPublisherResetsLagAndNeverCatchesUpInBursts() throws Exception {
         publisher.delayMs = 25;
         var request = request("lag"); request.setMaxMessages(5);

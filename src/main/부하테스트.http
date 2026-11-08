@@ -582,7 +582,7 @@ GET {{host}}/dt/streams
 ###
 GET {{host}}/dt/streams/sensor-1
 
-### 즉시 속도 변경 (다음 메시지부터 적용, rateTps=0.2이면 5초 간격)
+### 속도 변경 (다음 시각=마지막 성공 전송+새 주기, 지났으면 now; 0.2→0.1이면 직전 성공 후 10초)
 PATCH {{host}}/dt/streams/sensor-1
 Content-Type: application/json
 
@@ -594,7 +594,8 @@ Content-Type: application/json
 
 {"paused":true}
 
-### 재개 + payload 교체 (진행 중인 발행 1건은 완료될 수 있음)
+### 재개 + payload 교체 (실제 pause→resume이면 now에 1건 허용, 이미 실행 중이면 일정 유지)
+### payload만 교체하면 기존 예약 유지, 진행 중인 발행 1건은 완료될 수 있음
 PATCH {{host}}/dt/streams/sensor-1
 Content-Type: application/json
 

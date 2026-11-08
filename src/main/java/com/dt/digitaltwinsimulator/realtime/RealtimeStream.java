@@ -40,7 +40,7 @@ final class RealtimeStream implements Runnable {
     private boolean paused, disconnected;
     private long sent, failed, lagResets, skipped, revision, payloadRevision;
     private double skippedFraction;
-    private long disconnectedTick, reconnectAt, nextDue = startedNanos, endedNanos;
+    private long disconnectedTick, reconnectAt, nextDue = startedNanos, endedNanos, lastSentNanos;
     private Instant lastSentAt;
     private String lastError;
     private volatile boolean finished;
@@ -92,8 +92,14 @@ final class RealtimeStream implements Runnable {
     void patch(RealtimeResponses.Patch patch) {
         synchronized (lock) {
             if (state.terminal()) throw new RealtimeHttpException(409, "STREAM_NOT_ACTIVE", "Stream has already ended.");
-            accountDisconnected(System.nanoTime());
-            if (patch.rateTps() != null) rate = patch.rateTps();
+            long now = System.nanoTime();
+            accountDisconnected(now);
+            if (patch.rateTps() != null) {
+                rate = patch.rateTps();
+                nextDue = sent == 0 ? now : lastSentNanos + periodNanos();
+                if (nextDue - now < 0) nextDue = now;
+                revision++;
+            }
             if (patch.payload() != null) {
                 rows = List.of(patch.payload().deepCopy());
                 rowIndex = 0;
@@ -102,11 +108,15 @@ final class RealtimeStream implements Runnable {
                 tokens = new DtMessageFactory.TokenState();
                 payloadRevision++;
             }
-            if (patch.paused() != null) paused = patch.paused();
+            if (patch.paused() != null) {
+                if (paused && !patch.paused()) {
+                    nextDue = now;
+                    revision++;
+                }
+                paused = patch.paused();
+            }
             state = paused ? PAUSED : disconnected ? RECONNECTING : RUNNING;
-            revision++;
-            nextDue = System.nanoTime();
-            disconnectedTick = nextDue;
+            if (disconnected) disconnectedTick = now;
             lock.notifyAll();
             log.info("stream changed streamId={} rateTps={} state={}", safeId(), rate, state);
         }
@@ -185,6 +195,7 @@ final class RealtimeStream implements Runnable {
                     disconnected = false;
                     backoffSeconds = 1;
                     sent++;
+                    lastSentNanos = now;
                     lastSentAt = Instant.now();
                     successes.addLast(now);
                     while (!successes.isEmpty() && now - successes.getFirst() >= TimeUnit.SECONDS.toNanos(10)) successes.removeFirst();
@@ -200,6 +211,10 @@ final class RealtimeStream implements Runnable {
                             if (now > nextDue) lagResets++;
                             nextDue = now + period;
                         }
+                    } else {
+                        // A rate/resume PATCH during broker I/O must also respect this
+                        // just-completed send, rather than leave an already-expired due time.
+                        nextDue = now + periodNanos();
                     }
                     disconnectedTick = 0;
                     if (!state.terminal()) state = paused ? PAUSED : RUNNING;

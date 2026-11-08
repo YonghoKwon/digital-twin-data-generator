@@ -352,6 +352,8 @@ seq는 성공 전송 기준 1부터, cycle은 seq 기준, walk는 각 필드별 
 ```
 
 `PATCH /dt/streams/sensor-1`에 `{"rateTps":10}`, `{"paused":true}`, `{"paused":false}`를 보내 속도 변경·일시정지·재개합니다.
+rate 변경 시 다음 전송은 마지막 성공 전송 시각 + 새 주기(이미 지났으면 now)입니다. pause는 추가 전송을 만들지 않으며 실제 pause→resume 때만 now부터 한 건을 허용합니다. 이미 실행 중인 스트림에 paused=false를 반복해도 즉시 발행하지 않습니다.
+payload만 교체하면 기존 예약 시각을 유지합니다. 발행 도중 rate가 바뀌면 그 발행 완료 시각부터 새 주기를 적용합니다.
 payload 교체도 가능하며 다음 메시지부터 적용하고 walk 상태를 초기화합니다. 진행 중인 발행 한 건은 완료될 수 있습니다.
 FILE_DATA 스트림은 payload 대신 다음 source를 사용합니다:
 
