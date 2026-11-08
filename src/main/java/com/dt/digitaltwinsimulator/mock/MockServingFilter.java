@@ -11,7 +11,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
-/** Handles mock traffic before MVC's automatic OPTIONS/TRACE and request body logging. */
+/** Handles mock traffic before MVC's automatic OPTIONS and request body logging. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 30)
 class MockServingFilter extends OncePerRequestFilter {
@@ -32,6 +32,10 @@ class MockServingFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws IOException, ServletException {
+        if (request.getMethod().equals("TRACE")) {
+            response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            return;
+        }
         var result = engine.serve(request);
         int status = result.getStatusCode().value();
         response.setStatus(status);

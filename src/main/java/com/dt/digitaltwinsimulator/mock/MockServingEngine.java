@@ -1,6 +1,8 @@
 package com.dt.digitaltwinsimulator.mock;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -17,6 +19,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 @Component
 class MockServingEngine {
+    private static final Logger log = LoggerFactory.getLogger(MockServingEngine.class);
     private final MockProperties properties;
     private final MockRouteStore store;
     private final MockTemplate template;
@@ -57,7 +60,7 @@ class MockServingEngine {
                 status = response.status();
                 response.headers().forEach(headers::set);
                 delay = delay(response);
-                String source = store.readBody(response);
+                String source = store.readBodyForServing(response);
                 MockRoute.Fault fault = route.fault();
                 if (fault != null && fault.errorRate() != null
                         && ThreadLocalRandom.current().nextDouble() < fault.errorRate()) {
@@ -71,6 +74,11 @@ class MockServingEngine {
                 result = template.render(source, request, match.variables(), body, match.sequence(), json);
                 if (delay > 0) Thread.sleep(delay);
             }
+        } catch (MockBodyFileException exception) {
+            log.warn("Mock bodyFile unreadable: routeId={}, method={}, path={}", routeId, request.getMethod(), path, exception);
+            status = 500;
+            headers.clear();
+            result = mapper.writeValueAsString(Map.of("error", "MOCK_BODY_FILE_UNREADABLE", "routeId", routeId));
         } catch (MockInputException exception) {
             status = 400;
             headers.clear();
@@ -81,6 +89,7 @@ class MockServingEngine {
             headers.clear();
             result = "{\"error\":\"MOCK_INTERRUPTED\"}";
         } catch (RuntimeException exception) {
+            log.warn("Mock render failed: routeId={}, method={}, path={}", routeId, request.getMethod(), path, exception);
             status = 500;
             headers.clear();
             result = "{\"error\":\"MOCK_RENDER_ERROR\"}";
@@ -96,9 +105,6 @@ class MockServingEngine {
         if (response.delayMs() != null) return response.delayMs();
         long min = response.delayMinMs() == null ? 0 : response.delayMinMs();
         long max = response.delayMaxMs() == null ? min : response.delayMaxMs();
-        if (min == max) return min;
-        if (max != Long.MAX_VALUE) return ThreadLocalRandom.current().nextLong(min, max + 1);
-        return min == 0 ? ThreadLocalRandom.current().nextLong() & Long.MAX_VALUE
-                : ThreadLocalRandom.current().nextLong(min - 1, max) + 1;
+        return ThreadLocalRandom.current().nextLong(min, max + 1);
     }
 }

@@ -1,6 +1,7 @@
 package com.dt.digitaltwinsimulator.mock;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
@@ -22,6 +23,7 @@ public class MockProperties {
     @Min(1)
     private int journalSize = 1000;
     @Min(0)
+    @Max(Long.MAX_VALUE - 1)
     private long maxDelayMs = 60000;
 
     @PostConstruct

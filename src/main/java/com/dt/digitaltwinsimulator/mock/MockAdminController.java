@@ -24,6 +24,11 @@ public class MockAdminController {
         return store.list();
     }
 
+    @GetMapping("/status")
+    public MockRouteStore.LoadStatus status() {
+        return store.status();
+    }
+
     @GetMapping("/routes/{id}")
     public MockRoute route(@PathVariable String id) {
         return store.get(id);

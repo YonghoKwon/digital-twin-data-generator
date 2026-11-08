@@ -1,6 +1,8 @@
 package com.dt.digitaltwinsimulator.mock;
 
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.AntPathMatcher;
 import tools.jackson.databind.JsonNode;
@@ -10,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -21,6 +24,7 @@ import java.util.regex.Pattern;
 
 @Service
 class MockRouteStore {
+    private static final Logger log = LoggerFactory.getLogger(MockRouteStore.class);
     private static final Pattern METHOD = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Z-]+");
     private static final Pattern HEADER = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
     private final MockProperties properties;
@@ -28,10 +32,15 @@ class MockRouteStore {
     private final MockTemplate template;
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final Map<String, Registered> routes = new LinkedHashMap<>();
+    private Instant lastReloadAt;
+    private boolean lastReloadSuccessful;
+    private String lastReloadError;
 
     record Registered(MockRoute route, AtomicLong sequence, List<MockRoute.Response> responses, int captures) { }
     record Match(Registered registered, Map<String, String> variables, long sequence) { }
-    record ImportResult(List<String> imported, List<String> skipped) { }
+    record InvalidRow(String id, String reason) { }
+    record ImportResult(List<String> imported, List<String> skipped, List<InvalidRow> invalid) { }
+    record LoadStatus(int routeCount, Instant lastReloadAt, boolean lastReloadSuccessful, String lastReloadError) { }
 
     MockRouteStore(MockProperties properties, JsonMapper mapper, MockTemplate template) {
         this.properties = properties;
@@ -41,7 +50,16 @@ class MockRouteStore {
 
     @PostConstruct
     void initialize() {
-        reload();
+        try {
+            reload();
+        } catch (MockInputException exception) {
+            // reload records the failure and logs the filename/reason. Startup remains available for repair.
+            routes.clear();
+        }
+    }
+
+    synchronized LoadStatus status() {
+        return new LoadStatus(routes.size(), lastReloadAt, lastReloadSuccessful, lastReloadError);
     }
 
     synchronized List<MockRoute> list() {
@@ -84,11 +102,12 @@ class MockRouteStore {
     }
 
     synchronized Match match(String method, String path) {
-        // Stable sorting retains registration order when both specificity keys tie.
+        // Stable sorting retains registration order when all specificity keys tie.
         return routes.values().stream()
                 .filter(r -> !Boolean.FALSE.equals(r.route().enabled()) && r.route().method().equals(method))
                 .filter(r -> matcher.match(r.route().path(), path))
                 .sorted(Comparator.<Registered, Boolean>comparing(r -> matcher.isPattern(r.route().path()))
+                        .thenComparing(r -> r.route().path().contains("**"))
                         .thenComparingInt(Registered::captures))
                 .findFirst()
                 .map(r -> new Match(r, Map.copyOf(matcher.extractUriTemplateVariables(r.route().path(), path)),
@@ -97,6 +116,26 @@ class MockRouteStore {
     }
 
     synchronized List<MockRoute> reload() {
+        lastReloadAt = Instant.now();
+        try {
+            Map<String, Registered> loaded = loadRoutes();
+            // All-or-nothing: an invalid file leaves the previous routes and sequences intact.
+            routes.clear();
+            routes.putAll(loaded);
+            lastReloadSuccessful = true;
+            lastReloadError = null;
+            return list();
+        } catch (RuntimeException exception) {
+            MockInputException failure = exception instanceof MockInputException input ? input
+                    : new MockInputException("Cannot load routes-dir: invalid or unreadable route definition");
+            lastReloadSuccessful = false;
+            lastReloadError = failure.getMessage();
+            log.error("Mock route reload failed: {}", lastReloadError);
+            throw failure;
+        }
+    }
+
+    private Map<String, Registered> loadRoutes() {
         Map<String, Registered> loaded = new LinkedHashMap<>();
         Path directory = directory();
         if (Files.exists(directory)) {
@@ -104,59 +143,90 @@ class MockRouteStore {
             try (var files = Files.list(directory)) {
                 for (Path file : files.filter(p -> p.getFileName().toString().endsWith(".json"))
                         .sorted().toList()) {
-                    // Do not load a JSON route file through a link outside routes-dir either.
-                    Path safeFile = bodyPath(directory.relativize(file).toString());
-                    JsonNode root = mapper.readTree(Files.readString(safeFile));
-                    List<JsonNode> definitions = new ArrayList<>();
-                    if (root != null && root.isArray()) root.forEach(definitions::add);
-                    else definitions.add(root);
-                    for (JsonNode definition : definitions) {
-                        Registered route = prepare(mapper.treeToValue(definition, MockRoute.class));
-                        if (loaded.putIfAbsent(route.route().id(), route) != null) {
-                            throw new MockInputException("Duplicate route id in routes-dir");
-                        }
-                    }
+                    loadFile(directory, file, loaded);
                 }
-            } catch (IOException | IllegalArgumentException exception) {
-                throw new MockInputException("Cannot load routes-dir: invalid or unreadable route definition");
-            } catch (tools.jackson.core.JacksonException exception) {
-                throw new MockInputException("Cannot load routes-dir: invalid route JSON");
+            } catch (IOException exception) {
+                throw new MockInputException("Cannot list routes-dir: unreadable directory");
             }
         }
-        // All-or-nothing: an invalid file leaves the previous routes and sequences intact.
-        routes.clear();
-        routes.putAll(loaded);
-        return list();
+        return loaded;
+    }
+
+    private void loadFile(Path directory, Path file, Map<String, Registered> loaded) {
+        String failure = "Cannot load route file '" + file.getFileName() + "': ";
+        try {
+            // Do not load a JSON route file through a link outside routes-dir either.
+            Path safeFile = bodyPath(directory.relativize(file).toString());
+            JsonNode root = mapper.readTree(Files.readString(safeFile));
+            List<JsonNode> definitions = new ArrayList<>();
+            if (root != null && root.isArray()) root.forEach(definitions::add);
+            else definitions.add(root);
+            for (JsonNode definition : definitions) {
+                Registered route = prepare(mapper.treeToValue(definition, MockRoute.class));
+                if (loaded.putIfAbsent(route.route().id(), route) != null) {
+                    throw new MockInputException("Duplicate route id in routes-dir");
+                }
+            }
+        } catch (MockInputException exception) {
+            String reason = exception.getMessage().startsWith("Invalid template token:")
+                    ? "Invalid template token" : exception.getMessage();
+            throw new MockInputException(failure + reason);
+        } catch (tools.jackson.core.JacksonException exception) {
+            // Jackson diagnostics can contain source JSON. Publish a safe reason instead.
+            throw new MockInputException(failure + "invalid route JSON");
+        } catch (IOException | SecurityException exception) {
+            throw new MockInputException(failure + "unreadable UTF-8 route file");
+        } catch (IllegalArgumentException exception) {
+            throw new MockInputException(failure + "invalid route definition");
+        }
     }
 
     synchronized ImportResult importTable(JsonNode rows, boolean overwrite) {
         if (rows == null || !rows.isArray()) throw new MockInputException("DataTable export must be an array");
         Map<String, Registered> pending = new LinkedHashMap<>();
         List<String> skipped = new ArrayList<>();
+        List<InvalidRow> invalid = new ArrayList<>();
+        int rowNumber = 0;
         for (JsonNode row : rows) {
-            String name = field(row, "Name");
-            if (name.isBlank()) throw new MockInputException("Each DataTable row requires Name");
-            String id = "dtcore-" + name;
-            if (!overwrite && (routes.containsKey(id) || pending.containsKey(id))) {
-                skipped.add(id);
-                continue;
+            String id = "row-" + ++rowNumber;
+            try {
+                String name = field(row, "Name");
+                if (name.isBlank()) throw new MockInputException("Each DataTable row requires Name");
+                id = "dtcore-" + name;
+                if (!overwrite && (routes.containsKey(id) || pending.containsKey(id))) {
+                    skipped.add(id);
+                    continue;
+                }
+                String method = field(row, "ApiMethod");
+                int prefix = method.lastIndexOf("::");
+                if (prefix >= 0) method = method.substring(prefix + 2);
+                String path = field(row, "ApiUrl").split("\\?", 2)[0];
+                if (path.isBlank()) throw new MockInputException("Each DataTable row requires an ApiUrl path");
+                if (!path.startsWith("/")) path = "/" + path;
+                MockRoute route = new MockRoute(id, method, path, 200,
+                        Map.of(), "{}", null, null, null, null, List.of(), false, null, true);
+                pending.put(id, prepare(route));
+            } catch (MockInputException exception) {
+                invalid.add(new InvalidRow(id, exception.getMessage()));
             }
-            String method = field(row, "ApiMethod");
-            int prefix = method.lastIndexOf("::");
-            if (prefix >= 0) method = method.substring(prefix + 2);
-            MockRoute route = new MockRoute(id, method, field(row, "ApiUrl"), 200,
-                    Map.of(), "{}", null, null, null, null, List.of(), false, null, true);
-            pending.put(id, prepare(route));
         }
         routes.putAll(pending);
-        return new ImportResult(List.copyOf(pending.keySet()), List.copyOf(skipped));
+        return new ImportResult(List.copyOf(pending.keySet()), List.copyOf(skipped), List.copyOf(invalid));
+    }
+
+    String readBodyForServing(MockRoute.Response response) {
+        try {
+            return readBody(response);
+        } catch (MockInputException exception) {
+            throw new MockBodyFileException(exception);
+        }
     }
 
     String readBody(MockRoute.Response response) {
         if (response.bodyFile() == null) return response.body();
         try {
             return Files.readString(bodyPath(response.bodyFile()));
-        } catch (IOException exception) {
+        } catch (IOException | SecurityException exception) {
             throw new MockInputException("bodyFile must be a readable UTF-8 file within routes-dir");
         }
     }
@@ -173,6 +243,7 @@ class MockRouteStore {
         }
         String method = route.method() == null ? "" : route.method().trim().toUpperCase(Locale.ROOT);
         if (!METHOD.matcher(method).matches()) throw new MockInputException("Invalid HTTP method");
+        if (method.equals("TRACE")) throw new MockInputException("TRACE routes are not supported");
         String path = route.path();
         if (path == null || !path.startsWith("/") || path.contains("?") || path.contains("#")
                 || path.contains("\r") || path.contains("\n")) {
@@ -211,7 +282,8 @@ class MockRouteStore {
                 definitions.stream().map(r -> new MockRoute.Response(r.status(), copyHeaders(r.headers()), r.body(),
                         r.bodyFile(), r.delayMs(), r.delayMinMs(), r.delayMaxMs())).toList(),
                 Boolean.TRUE.equals(route.cycle()), fault, !Boolean.FALSE.equals(route.enabled()));
-        int captures = (int) Pattern.compile("\\{[^}]+}|\\*\\*|\\*").matcher(path).results().count();
+        String capturePattern = path.contains("**") ? "\\{[^}]+}" : "\\{[^}]+}|\\*";
+        int captures = (int) Pattern.compile(capturePattern).matcher(path).results().count();
         return new Registered(copy, new AtomicLong(), List.copyOf(responses), captures);
     }
 
@@ -287,7 +359,7 @@ class MockRouteStore {
                 throw new MockInputException("bodyFile must stay within routes-dir and name an existing file");
             }
             return file;
-        } catch (IOException | InvalidPathException exception) {
+        } catch (IOException | InvalidPathException | SecurityException exception) {
             throw new MockInputException("bodyFile must stay within routes-dir and name an existing file");
         }
     }

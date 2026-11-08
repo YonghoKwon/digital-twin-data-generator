@@ -1,8 +1,15 @@
 package com.dt.digitaltwinsimulator.mock;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxyUtil;
+import ch.qos.logback.core.read.ListAppender;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -22,6 +29,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -47,6 +55,7 @@ class RestMockTest {
     @Autowired JsonMapper mapper;
     @Autowired MockRouteStore store;
     @Autowired MockTemplate template;
+    @Autowired Validator validator;
     @LocalServerPort int port;
 
     @DynamicPropertySource
@@ -94,6 +103,28 @@ class RestMockTest {
         assertThat(json(missing).get("error").asString()).isEqualTo("NO_MOCK_ROUTE");
         assertThat(json(missing).get("method").asString()).isEqualTo("DELETE");
         assertThat(json(missing).get("path").asString()).isEqualTo("/absent");
+    }
+
+    @Test
+    void doubleWildcardAlwaysLosesToVariablesAndSingleWildcardsThenLiteralWins() throws Exception {
+        create(route("catch-all", "GET", "/api/**", "catch-all"));
+        create(route("variables", "GET", "/api/{line}/{coil}", "variables"));
+        assertThat(call("GET", "/api/L1/C1").getResponse().getContentAsString()).isEqualTo("variables");
+        create(route("single-star", "GET", "/api/*/C1", "single-star"));
+        assertThat(call("GET", "/api/L1/C1").getResponse().getContentAsString()).isEqualTo("single-star");
+        create(route("exact", "GET", "/api/L1/C1", "exact"));
+        assertThat(call("GET", "/api/L1/C1").getResponse().getContentAsString()).isEqualTo("exact");
+        assertThat(call("GET", "/api/L1/C1/deeper").getResponse().getContentAsString()).isEqualTo("catch-all");
+    }
+
+    @Test
+    void doubleWildcardPatternsUseVariableCountThenRegistrationOrder() throws Exception {
+        create(route("with-variable", "GET", "/api/{line}/**", "with-variable"));
+        create(route("no-variable-first", "GET", "/api/**/**", "no-variable-first"));
+        create(route("no-variable-second", "GET", "/api/**", "no-variable-second"));
+        assertThat(call("GET", "/api/L1/C1").getResponse().getContentAsString()).isEqualTo("no-variable-first");
+        mvc.perform(delete("/mock-admin/routes/no-variable-first")).andExpect(status().isNoContent());
+        assertThat(call("GET", "/api/L1/C1").getResponse().getContentAsString()).isEqualTo("no-variable-second");
     }
 
     @Test
@@ -185,6 +216,30 @@ class RestMockTest {
     }
 
     @Test
+    void randomDelayAcceptsEqualBoundsAtZeroAndConfiguredMaximum() throws Exception {
+        Map<String, Object> route = route("bounds", "GET", "/bounds", "ok");
+        route.put("delayMinMs", 0);
+        route.put("delayMaxMs", 0);
+        create(route);
+        assertThat(call("GET", "/bounds").getResponse().getStatus()).isEqualTo(200);
+        assertThat(requests().get(0).get("delayMs").longValue()).isZero();
+        route.put("delayMinMs", 100);
+        route.put("delayMaxMs", 100);
+        update(route);
+        assertThat(call("GET", "/bounds").getResponse().getStatus()).isEqualTo(200);
+        assertThat(requests().get(0).get("delayMs").longValue()).isEqualTo(100);
+    }
+
+    @Test
+    void delayConfigurationRejectsExclusiveUpperBoundOverflow() {
+        MockProperties properties = new MockProperties();
+        properties.setMaxDelayMs(Long.MAX_VALUE);
+        assertThat(validator.validate(properties)).anyMatch(v -> v.getPropertyPath().toString().equals("maxDelayMs"));
+        properties.setMaxDelayMs(Long.MAX_VALUE - 1);
+        assertThat(validator.validate(properties)).isEmpty();
+    }
+
+    @Test
     void journalBoundsMasksAndTruncatesUtf8BodyAndCanBeCleared() throws Exception {
         create(route("journal", "POST", "/journal", "ok"));
         for (int i = 0; i < 4; i++) {
@@ -234,8 +289,56 @@ class RestMockTest {
         } finally {
             Files.delete(outside);
         }
-        Files.delete(DIRECTORY.resolve("bodies/coil.txt"));
-        assertThat(call("GET", "/file/C1").getResponse().getStatus()).isEqualTo(400);
+    }
+
+    @Test
+    void missingOrUnreadableBodyFileAfterRegistrationReturns500AndWarns() throws Exception {
+        Path bodyFile = DIRECTORY.resolve("body.txt");
+        Files.writeString(bodyFile, "ok");
+        Map<String, Object> route = route("lost-file", "GET", "/lost-file", "unused");
+        route.remove("body");
+        route.put("bodyFile", "body.txt");
+        route.put("headers", Map.of("Content-Type", "text/plain", "X-Route", "clear-on-error"));
+        create(route);
+        try (LogCapture logs = new LogCapture(MockServingEngine.class)) {
+            Files.delete(bodyFile);
+            assertBodyFileFailure(call("GET", "/lost-file"));
+            // Invalid UTF-8 also fails reading on platforms where permission-based tests are unreliable.
+            Files.write(bodyFile, new byte[]{(byte) 0xc3, (byte) 0x28});
+            assertBodyFileFailure(call("GET", "/lost-file"));
+            assertThat(logs.events()).hasSize(2).allSatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage()).contains("routeId=lost-file", "method=GET", "path=/lost-file");
+                assertThat(event.getThrowableProxy()).isNotNull();
+            });
+        }
+        assertThat(requests().get(0).get("status").intValue()).isEqualTo(500);
+    }
+
+    @Test
+    void renderFailureWarnsWithRouteContextAndStackWithoutRequestOrResponseContents() throws Exception {
+        Path bodyFile = DIRECTORY.resolve("render.txt");
+        Files.writeString(bodyFile, "ok");
+        Map<String, Object> route = route("render-failure", "POST", "/render-failure", "unused");
+        route.remove("body");
+        route.put("bodyFile", "render.txt");
+        route.put("headers", Map.of("X-Private-Response", "response-header-secret"));
+        create(route);
+        Files.writeString(bodyFile, "response-body-secret {{now:invalid[}}");
+        try (LogCapture logs = new LogCapture(MockServingEngine.class)) {
+            MvcResult response = mvc.perform(post("/stub/render-failure")
+                    .header("X-Private", "request-header-secret").content("request-body-secret")).andReturn();
+            assertThat(response.getResponse().getStatus()).isEqualTo(500);
+            assertThat(json(response).get("error").asString()).isEqualTo("MOCK_RENDER_ERROR");
+            assertThat(response.getResponse().getHeader("X-Private-Response")).isNull();
+            assertThat(logs.events()).hasSize(1);
+            ILoggingEvent event = logs.events().getFirst();
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("routeId=render-failure", "method=POST", "path=/render-failure");
+            assertThat(event.getThrowableProxy()).isNotNull();
+            assertThat(event.getFormattedMessage() + ThrowableProxyUtil.asString(event.getThrowableProxy()))
+                    .doesNotContain("request-header-secret", "request-body-secret", "response-header-secret", "response-body-secret");
+        }
     }
 
     @Test
@@ -291,6 +394,7 @@ class RestMockTest {
         JsonNode first = json(mvc.perform(post("/mock-admin/import/dtcore-api-table").contentType(MediaType.APPLICATION_JSON).content(rows))
                 .andExpect(status().isOk()).andReturn());
         assertThat(first.get("imported").size()).isEqualTo(2);
+        assertThat(first.get("invalid").size()).isZero();
         assertThat(call("GET", "/coils/C1").getResponse().getContentAsString()).isEqualTo("{}");
         update(route("dtcore-GetCoil", "GET", "/coils/{id}", "custom"));
         JsonNode skipped = json(mvc.perform(post("/mock-admin/import/dtcore-api-table").contentType(MediaType.APPLICATION_JSON).content(rows)).andReturn());
@@ -302,6 +406,52 @@ class RestMockTest {
         assertThat(call("GET", "/coils/C1").getResponse().getContentAsString()).isEqualTo("{}");
         mvc.perform(post("/mock-admin/import/dtcore-api-table").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void dtcoreImportNormalizesPathsAndReportsInvalidRowsWhileImportingValidOnes() throws Exception {
+        String rows = """
+                [{"Name":"Relative","ApiMethod":"GET","ApiUrl":"api/coil/{id}?view=full"},
+                 {"Name":"Fragment","ApiMethod":"GET","ApiUrl":"/api/coil#bad"},
+                 {"Name":"Slash","ApiMethod":"POST","ApiUrl":"/api/coil?mode=test"},
+                 {"Name":"MissingUrl","ApiMethod":"GET"},
+                 {"Name":"QueryOnly","ApiMethod":"GET","ApiUrl":"?mode=test"},
+                 {"Name":"BadMethod","ApiMethod":"BAD METHOD","ApiUrl":"/bad"},
+                 {"Name":"bad name","ApiMethod":"GET","ApiUrl":"/bad"},
+                 {"ApiMethod":"GET","ApiUrl":"/no-name"}, null,
+                 {"Name":"AfterInvalid","ApiMethod":"GET","ApiUrl":"after?query=ignored"}]
+                """;
+        JsonNode result = json(mvc.perform(post("/mock-admin/import/dtcore-api-table")
+                .contentType(MediaType.APPLICATION_JSON).content(rows)).andExpect(status().isOk()).andReturn());
+        assertThat(result.get("imported").valueStream().map(JsonNode::asString).toList())
+                .containsExactly("dtcore-Relative", "dtcore-Slash", "dtcore-AfterInvalid");
+        assertThat(result.get("skipped").size()).isZero();
+        assertThat(result.get("invalid").valueStream().map(r -> r.get("id").asString()).toList())
+                .containsExactly("dtcore-Fragment", "dtcore-MissingUrl", "dtcore-QueryOnly", "dtcore-BadMethod", "dtcore-bad name", "row-8", "row-9");
+        assertThat(result.get("invalid").valueStream().map(r -> r.get("reason").asString()).toList())
+                .allSatisfy(reason -> assertThat(reason).isNotBlank());
+        assertThat(store.get("dtcore-Relative").path()).isEqualTo("/api/coil/{id}");
+        assertThat(store.get("dtcore-Slash").path()).isEqualTo("/api/coil");
+        assertThat(call("GET", "/api/coil/C1").getResponse().getStatus()).isEqualTo(200);
+        assertThat(call("GET", "/after").getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void invalidImportOverwriteKeepsExistingRouteAndSuccessfulRowsStillImport() throws Exception {
+        create(route("dtcore-Existing", "GET", "/existing", "original"));
+        String rows = """
+                [{"Name":"Existing","ApiMethod":"TRACE","ApiUrl":"existing"},
+                 {"Name":"New","ApiMethod":"GET","ApiUrl":"new?x=1"}]
+                """;
+        JsonNode skipped = json(mvc.perform(post("/mock-admin/import/dtcore-api-table")
+                .contentType(MediaType.APPLICATION_JSON).content(rows)).andExpect(status().isOk()).andReturn());
+        assertThat(skipped.get("skipped").get(0).asString()).isEqualTo("dtcore-Existing");
+        JsonNode overwritten = json(mvc.perform(post("/mock-admin/import/dtcore-api-table?overwrite=true")
+                .contentType(MediaType.APPLICATION_JSON).content(rows)).andExpect(status().isOk()).andReturn());
+        assertThat(overwritten.get("invalid").get(0).get("id").asString()).isEqualTo("dtcore-Existing");
+        assertThat(overwritten.get("invalid").get(0).get("reason").asString()).contains("TRACE");
+        assertThat(overwritten.get("imported").get(0).asString()).isEqualTo("dtcore-New");
+        assertThat(call("GET", "/existing").getResponse().getContentAsString()).isEqualTo("original");
     }
 
     @Test
@@ -325,6 +475,55 @@ class RestMockTest {
     }
 
     @Test
+    void startupLoadFailureLeavesEmptyRoutesAndReportsFilenameAndReasonWithoutJsonContents() throws Exception {
+        Files.writeString(DIRECTORY.resolve("a-valid.json"), mapper.writeValueAsString(route("valid", "GET", "/valid", "ok")));
+        MockProperties properties = new MockProperties();
+        properties.setRoutesDir(DIRECTORY.toString());
+        for (String content : List.of("{broken route-body-secret", "{\"id\":\"invalid\",\"method\":\"TRACE\",\"path\":\"/trace\"}")) {
+            Files.writeString(DIRECTORY.resolve("z-broken.json"), content);
+            MockRouteStore startup = new MockRouteStore(properties, mapper, template);
+            try (LogCapture logs = new LogCapture(MockRouteStore.class)) {
+                startup.initialize();
+                assertThat(startup.list()).isEmpty();
+                assertThat(startup.status().routeCount()).isZero();
+                assertThat(startup.status().lastReloadAt()).isNotNull();
+                assertThat(startup.status().lastReloadSuccessful()).isFalse();
+                assertThat(startup.status().lastReloadError()).contains("z-broken.json");
+                assertThat(logs.events()).hasSize(1);
+                assertThat(logs.events().getFirst().getLevel()).isEqualTo(Level.ERROR);
+                assertThat(logs.events().getFirst().getFormattedMessage()).contains("z-broken.json", startup.status().lastReloadError())
+                        .doesNotContain("route-body-secret");
+            }
+        }
+    }
+
+    @Test
+    void statusTracksSuccessfulFailedAndRecoveredReloadWhileKeepingRoutesAndSequence() throws Exception {
+        Files.writeString(DIRECTORY.resolve("a.json"), mapper.writeValueAsString(route("seq", "GET", "/seq", "{{seq}}")));
+        mvc.perform(post("/mock-admin/routes/reload")).andExpect(status().isOk());
+        JsonNode successful = json(mvc.perform(get("/mock-admin/status")).andExpect(status().isOk()).andReturn());
+        assertThat(successful.get("routeCount").intValue()).isEqualTo(1);
+        assertThat(successful.get("lastReloadSuccessful").booleanValue()).isTrue();
+        assertThat(successful.get("lastReloadError").isNull()).isTrue();
+        assertThat(call("GET", "/seq").getResponse().getContentAsString()).isEqualTo("1");
+        Files.writeString(DIRECTORY.resolve("broken.json"), "not json");
+        mvc.perform(post("/mock-admin/routes/reload")).andExpect(status().isBadRequest());
+        JsonNode failed = json(mvc.perform(get("/mock-admin/status")).andExpect(status().isOk()).andReturn());
+        assertThat(failed.get("routeCount").intValue()).isEqualTo(1);
+        assertThat(failed.get("lastReloadSuccessful").booleanValue()).isFalse();
+        assertThat(failed.get("lastReloadError").asString()).contains("broken.json", "invalid route JSON");
+        assertThat(Instant.parse(failed.get("lastReloadAt").asString()))
+                .isAfterOrEqualTo(Instant.parse(successful.get("lastReloadAt").asString()));
+        assertThat(call("GET", "/seq").getResponse().getContentAsString()).isEqualTo("2");
+        Files.delete(DIRECTORY.resolve("broken.json"));
+        mvc.perform(post("/mock-admin/routes/reload")).andExpect(status().isOk());
+        JsonNode recovered = json(mvc.perform(get("/mock-admin/status")).andExpect(status().isOk()).andReturn());
+        assertThat(recovered.get("lastReloadSuccessful").booleanValue()).isTrue();
+        assertThat(recovered.get("lastReloadError").isNull()).isTrue();
+        assertThat(call("GET", "/seq").getResponse().getContentAsString()).isEqualTo("1");
+    }
+
+    @Test
     void concurrentCallsHaveUniqueSequencesAndConsumeEachResponseExactlyOnce() throws Exception {
         Map<String, Object> route = route("concurrent", "GET", "/concurrent", "{{seq}}");
         route.put("responses", List.of(Map.of("status", 201), Map.of("status", 202)));
@@ -344,16 +543,40 @@ class RestMockTest {
     @Test
     void realHttpSupportsAllMethodsAtConfiguredBaseAndPreservesHeadSemantics() throws Exception {
         try (HttpClient client = HttpClient.newHttpClient()) {
-            for (String method : List.of("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "PURGE")) {
+            for (String method : List.of("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "PURGE")) {
                 create(route("method-" + method, method, "/method", "from-" + method));
                 HttpResponse<String> response = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/stub/method"))
                         .method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
                 assertThat(response.statusCode()).as(method).isEqualTo(200);
                 assertThat(response.body()).as(method).isEqualTo(method.equals("HEAD") ? "" : "from-" + method);
             }
-            HttpResponse<String> outside = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mock-admin/routes"))
-                    .method("TRACE", HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
-            assertThat(outside.statusCode()).isEqualTo(405);
+        }
+    }
+
+    @Test
+    void traceRouteRegistrationAndUpdateAreRejected() throws Exception {
+        Map<String, Object> trace = route("trace", " trace ", "/trace", "must not reflect");
+        mvc.perform(post("/mock-admin/routes").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(trace)))
+                .andExpect(status().isBadRequest());
+        assertThat(store.list()).isEmpty();
+        create(route("trace", "GET", "/trace", "existing"));
+        mvc.perform(put("/mock-admin/routes/trace").contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(trace)))
+                .andExpect(status().isBadRequest());
+        assertThat(call("GET", "/trace").getResponse().getContentAsString()).isEqualTo("existing");
+    }
+
+    @Test
+    void traceRequestsReturn405ForMockAndAdminWithoutReflectingHeaders() throws Exception {
+        create(route("get-only", "GET", "/method", "get"));
+        mvc.perform(request("TRACE", URI.create("/stub/method"))).andExpect(status().isMethodNotAllowed());
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            for (String path : List.of("/stub/method", "/stub/absent", "/mock-admin/routes")) {
+                HttpResponse<String> response = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .header("X-Private", "trace-secret").method("TRACE", HttpRequest.BodyPublishers.noBody()).build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertThat(response.statusCode()).as(path).isEqualTo(405);
+                assertThat(response.body()).doesNotContain("trace-secret");
+            }
         }
     }
 
@@ -361,6 +584,7 @@ class RestMockTest {
     void swaggerShowsAdminTagAndHidesServingPaths() throws Exception {
         JsonNode docs = json(mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn());
         assertThat(docs.get("paths").has("/mock-admin/routes")).isTrue();
+        assertThat(docs.get("paths").has("/mock-admin/status")).isTrue();
         assertThat(docs.get("paths").get("/mock-admin/routes").get("get").get("tags").get(0).asString()).isEqualTo("REST Mock Admin");
         assertThat(docs.get("paths").properties()).noneMatch(e -> e.getKey().startsWith("/stub"));
     }
@@ -389,6 +613,35 @@ class RestMockTest {
 
     private JsonNode json(MvcResult result) throws Exception {
         return mapper.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8));
+    }
+
+    private void assertBodyFileFailure(MvcResult response) throws Exception {
+        assertThat(response.getResponse().getStatus()).isEqualTo(500);
+        assertThat(json(response).get("error").asString()).isEqualTo("MOCK_BODY_FILE_UNREADABLE");
+        assertThat(json(response).get("routeId").asString()).isEqualTo("lost-file");
+        assertThat(response.getResponse().getContentType()).startsWith("application/json");
+        assertThat(response.getResponse().getHeader("X-Route")).isNull();
+    }
+
+    private static class LogCapture implements AutoCloseable {
+        private final Logger logger;
+        private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+
+        LogCapture(Class<?> type) {
+            logger = (Logger) LoggerFactory.getLogger(type);
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        List<ILoggingEvent> events() {
+            return appender.list;
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     private static Path temporaryDirectory() {
