@@ -2,6 +2,18 @@
 
 REST API 요청으로 특정 포맷의 데이터를 대량 생성한 뒤 ActiveMQ Artemis Topic으로 전송하는 시뮬레이터입니다.
 
+## 실행 환경
+
+- Java 21
+- Spring Boot 4.1.2
+- springdoc-openapi 3.2.0
+- Apache Artemis Jakarta client 2.57.0 (`org.apache.artemis`)
+- Jackson 3 (`tools.jackson.*`, Spring이 제공하는 `JsonMapper` 사용)
+
+JSON 요청/응답의 기존 기본 동작은 `spring.jackson.use-jackson2-defaults=true`로 유지합니다.
+이 설정은 Jackson 3에 적용되며, Jackson annotation 패키지는 `com.fasterxml.jackson.annotation`을 유지합니다.
+JPA/H2/Postgres 의존성과 H2 콘솔(`/h2-console`)은 유지합니다.
+
 ## Swagger UI
 
 - http://localhost:8080/swagger
@@ -357,7 +369,9 @@ Task 상태 이력 DB 저장 기능과 `/activemq/task/statuses` 계열 API는 �
 ## 테스트
 
 ```bash
-mvn test
+./mvnw -B test
 ```
 
+Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용합니다. 설치된 Maven으로 `mvn test`도 가능합니다.
+테스트는 외부 Artemis 브로커 없이 실행되며, dry-run의 `messages` object 응답도 검증합니다.
 CI는 GitHub Actions에서 Java 21 기준으로 `mvn -B test`를 수행합니다.

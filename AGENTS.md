@@ -6,6 +6,11 @@
 
 이 프로젝트는 Spring Boot 기반 ActiveMQ Artemis 데이터 생성/전송 시뮬레이터입니다.
 
+기술 버전: Java 21, Spring Boot 4.1.2, springdoc-openapi 3.2.0, Apache Artemis Jakarta client 2.57.0 (`org.apache.artemis`).
+JSON 처리는 Jackson 3 (`tools.jackson.*`)와 Spring이 주입하는 `JsonMapper`를 사용합니다.
+Jackson annotation 패키지는 `com.fasterxml.jackson.annotation`을 유지하며, `spring.jackson.use-jackson2-defaults=true`로 기존 JSON 기본 동작을 유지합니다.
+JPA/H2/Postgres와 H2 콘솔은 유지하며, Boot 4에서는 콘솔 자동설정을 위해 `spring-boot-h2console` 모듈이 필요합니다.
+
 현재 주요 기능:
 
 - 포맷 기반 데이터 생성
@@ -57,9 +62,11 @@ http://localhost:8080/swagger-ui/index.html
 ## 테스트
 
 ```bash
-mvn test
+./mvnw -B test
 ```
 
+Windows PowerShell에서는 `.\mvnw.cmd -B test`를 사용하며, 설치된 Maven의 `mvn test`도 가능합니다.
+외부 Artemis 브로커 없이 기존 테스트와 dry-run JSON object 계약 테스트를 실행합니다.
 CI도 Java 21 기준으로 `mvn -B test`를 실행합니다.
 
 ## 주요 API
