@@ -94,7 +94,10 @@ class StabilizationRequestTest {
             mvc.perform(post("/activemq/request/file/path").contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(body)))
                     .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"))
-                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("outside the allowed base directory")));
+                    // "Z:/outside"는 Linux에서 base-dir 하위 상대 경로가 되어 "missing"으로 거부된다. 어느 쪽이든 원인이 보여야 한다.
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.anyOf(
+                            org.hamcrest.Matchers.containsString("outside the allowed base directory"),
+                            org.hamcrest.Matchers.containsString("missing or unreadable"))));
         }
         var body = request("/file");
         body.put("fileName", "missing.json");
