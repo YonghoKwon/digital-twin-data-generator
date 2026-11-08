@@ -1,5 +1,5 @@
 // Credentials anywhere in a request (including payloads and header names) never persist.
-const sensitive = /(?:^pw$|password|passwd|passcode|token|secret|authorization|cookie|credential|api[-_]?key)/i;
+const sensitive = /(?:^pw$|activeMQIp|password|passwd|passcode|token|secret|authorization|cookie|credential|api[-_]?key)/i;
 export function sanitize(value) {
   if (Array.isArray(value)) return value.map(sanitize);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !sensitive.test(key)).map(([key, child]) => [key, sanitize(child)]));

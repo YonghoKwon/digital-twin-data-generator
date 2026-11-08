@@ -1,5 +1,5 @@
 // No dependencies or frontend build. Run with Node 22:
-// node --experimental-default-type=module --test src/test/ui/ui.test.mjs
+// node --test src/test/ui/*.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request, ApiError, errorText, createScope } from '../../main/resources/static/ui/api.js';

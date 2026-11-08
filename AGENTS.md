@@ -76,14 +76,16 @@ CI도 Java 21 기준으로 `mvn -B test`를 실행합니다.
 
 ## 웹 UI
 
-- `/ui/`는 한국어 운영 SPA이며 `#/dashboard`, `#/publish`, `#/streams`, `#/subscriptions`, `#/mock`, `#/scenarios`, `#/legacy`로 이동합니다.
-- 구현 범위는 `src/main/resources/static/ui/**`, `controller/UiController` 및 루트 redirect입니다. 기존 API·브로커 로직은 재사용합니다. 빌드 도구·외부 CDN·라이브러리 없이 ES modules를 사용합니다.
-- 대시보드 3초, 스트림/run 1초, 구독 목록·Mock 기록·기존 task 3초 polling을 사용합니다. 화면 전환 시 요청·polling·SSE를 정리하며 숨겨진 브라우저에서는 polling을 멈춥니다.
-- 구독을 선택하면 SSE를 연결하고 overflow/재연결 시 마지막 seq 이후 기록을 REST로 이어받아 중복 없이 병합합니다. 화면 최대 500건, 화면 일시정지 중에도 수신 유지, 서버 버퍼에서 제거된 구간은 경고합니다.
-- 최근 단발 요청 10개는 localStorage에 저장하며 브로커 연결 정보와 `pw` 및 password/token/authorization 등 민감한 이름의 필드를 재귀 제거합니다(JSON 문자열 내부도 처리). 비밀번호 입력은 password이며 다른 입력·서버 응답은 DOM textContent/text node로 렌더링합니다.
-- 시나리오 화면은 전달된 S5 API 계약을 따르며 404면 기능 미탑재 안내를 표시합니다. REST Mock 실행 seq는 API 미제공으로 표시합니다. 부하 테스트 등 서버 작업은 메뉴 이동 후에도 별도로 취소해야 합니다.
-- 정적 파일은 `spring.web.resources.cache.cachecontrol.no-cache=true`로 매 요청 재검증합니다(업데이트 후 이전 JS 모듈이 남지 않게). 시나리오 라이브러리 유효성은 VALID/INVALID, 반복 재생 중 events는 누적값으로 표시합니다.
-- `ui/UiServingTest`가 root·Swagger redirect, `/ui/` HTML, 모든 JS/CSS content-type과 no-cache 헤더를 확인합니다. 선택 Node 검증: `node --experimental-default-type=module --test src/test/ui/ui.test.mjs` (Node 22, 추가 패키지 없음).
+- `/ui/`는 HMI 한국어 SPA이며 `#/dashboard`, `#/publish`, `#/streams`, `#/subscriptions`, `#/mock`, `#/scenarios`, `#/legacy`를 제공합니다. 132px 메뉴, 고정 상태 띠, 회색 토큰과 그룹 박스·표·faceplate를 사용합니다. 정상 색은 작은 램프에만 적용합니다. 테마는 시스템/주간/야간, 1024px 미만은 1단과 가로 메뉴입니다.
+- 구현은 `src/main/resources/static/ui/**`와 기존 `controller/UiController`를 사용합니다. 백엔드 계약을 재사용하며 외부 CDN·npm·빌드 도구·라이브러리를 추가하지 않습니다. 서버 데이터는 text node/textContent로 렌더링합니다.
+- 상태 띠는 3초, 스트림/run은 1초, 구독 목록·Mock 기록·기존 task는 3초 polling입니다. 전환 시 화면 요청·polling·SSE를 정리하고 숨겨진 브라우저에서 polling을 멈춥니다. 전체 정지는 dialog 확인 후 `DELETE /dt/streams`, `DELETE /dt/scenario-runs`, `POST /activemq/task/cancel-tasks`를 순차 실행해 결과를 모아 알립니다.
+- 명령 팔레트는 Ctrl+K 또는 /, 화면 이동은 입력 중이 아닐 때 1~7, 현재 폼 주 동작은 Ctrl+Enter, 도움말은 ?, dialog 닫기는 Esc입니다. Topic·Message ID datalist는 addresses·실행 항목·시나리오 정의·최근 입력을 병합합니다.
+- 개요는 브로커와 consumerCount, 지정 Topic(기본 dt.ping)의 SIM_PING 왕복, WebSocketUrl/TestApiUrl 복사를 제공합니다. 주소 표는 activemq. 및 $ 접두사 내부 주소를 숨기고 #/* 주소는 아래 시뮬레이터 구독 줄로 분리하며 구독자 0인 Topic은 흐리게 표시합니다. 일반 Topic의 수에도 시뮬레이터 구독이 포함될 수 있습니다. 임시 구독 삭제는 화면 전환으로 요청이 취소되어도 수행합니다. UE의 실제 수신은 별도 검수합니다.
+- 단발·스트림은 기본 Payload 프리셋 3종과 사용자 저장/불러오기/삭제, JSON 정렬·오류 줄/열·토큰 삽입을 제공합니다. 스트림 면/표 전환, 실제 TPS·60초 스파크라인, 속도 반감/배증과 슬라이더, pause/stop/복제를 제공합니다. 스파크라인은 숫자 옆 36px 높이, 고정 60초 폭과 0~max(목표 TPS, 관측 최대)×1.2 축, 목표 점선을 사용하며 일시정지는 0입니다. 스트림/run 지표는 한글 라벨과 Bahnschrift 고정폭 숫자를 사용합니다. 복제는 이 브라우저에 원본 요청이 저장된 스트림에 한정합니다.
+- 구독은 SSE와 afterSeq REST 복구를 중복 없이 병합하며 화면 최대 500건을 보관합니다. 화면 일시정지 중에도 수신하고, 최신 따라가기 해제 시 스크롤 위치를 유지합니다. 메시지 표는 고정 머리글·행 전체 선택·위/아래 방향키 이동을 지원하며 구독이 하나이거나 마지막 선택이 유효하면 자동 선택합니다. 상세 시각은 로컬 yyyy-MM-dd HH:mm:ss.SSS, ISO 원문은 title입니다. 본문 접기/정렬/복사·properties, Topic 부분 검색·MESSAGE_ID 완전 일치·Topic별 보관 수를 제공합니다. 제거된 서버 버퍼 구간은 경고합니다.
+- REST는 route 표/편집/사용 토글, 경로 변수 기반 실제 호출, 4xx/5xx 경고 행과 호출 기록 자동 새로고침 토글을 제공합니다. route 실행 seq는 조회 API에서 제공하지 않습니다. 시나리오는 라이브러리 바로 실행, 검증 오류 목록·대응 행 선택, 타임라인/seek/배속을 제공합니다. MARK는 라벨만 두 줄로 충돌을 피하고 우측 정렬·말줄임·title을 지원합니다. 최근 로그는 최신순·최대 320px 내부 스크롤이며 FAILED/MOCK_FAILED는 경보, SKIPPED는 경고 행입니다. CSV 미래 행 시각은 API에 없어 트랙 구간·처리 로그를 사용하고 반복 눈금은 정의별 2000개로 제한합니다. 원본 정의 없는 run은 로그를 사용합니다. 404는 기능 미탑재로 안내하고 반복 events는 누적값입니다.
+- 마지막 화면·폼의 정상 JSON 초안·선택 구독/스트림·프리셋·최근 요청 10개는 localStorage를 사용합니다. 브로커 입력은 저장에서 제외하고 pw 및 password/token/authorization 등 민감 이름을 재귀 제거합니다(JSON 문자열 포함). 비밀번호 입력은 password입니다. 민감 값은 복원 후 다시 입력합니다. 삭제·비우기·정지는 대상 dialog로 확인합니다. 메뉴 이동 후 서버 작업은 별도로 정지해야 합니다.
+- 정적 파일은 `spring.web.resources.cache.cachecontrol.no-cache=true`로 매 요청 재검증합니다. `ui/UiServingTest`는 root/Swagger redirect·HTML·모든 JS/CSS content-type/no-cache·안전 렌더링·HMI shell을 확인합니다. Node 22 검증은 `node --test src/test/ui/*.test.mjs`, 문법은 모든 UI JS의 `node --check`입니다.
 
 ## 주요 API
 

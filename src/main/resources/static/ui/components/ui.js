@@ -1,4 +1,5 @@
 import { errorText } from '../api.js';
+import { jsonErrorPosition } from './state.js';
 let sequence = 0;
 
 export function el(tag, attrs = {}, ...children) {
@@ -17,7 +18,7 @@ export function el(tag, attrs = {}, ...children) {
 }
 export const button = (label, onclick, kind = '') => el('button', { type: 'button', class: kind, onclick }, label);
 export const help = text => el('p', { class: 'help' }, text);
-export const empty = text => el('div', { class: 'empty' }, text);
+export const empty = (text, label, callback) => el('div', { class: 'empty' }, text, label ? button(label, callback) : null);
 export const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 export const code = value => el('pre', {}, pretty(value) ?? '');
 // ISO 시각(나노초 포함 가능)을 'YYYY. M. D. 오전 hh:mm:ss' 형식으로. 값이 없거나 읽을 수 없으면 대체 문자열.
@@ -26,9 +27,15 @@ export const time = (value, fallback = '없음') => {
   const date = new Date(String(value).replace(/(\.\d{3})\d+/, '$1'));
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('ko-KR');
 };
-export const badge = state => el('span', { class: `badge ${/^[A-Z_]+$/.test(state || '') ? state : ''}` }, state || 'UNKNOWN');
+export const badge = state => {
+  const names = { RUNNING: '실행 중', PAUSED: '일시정지', RECONNECTING: '재연결 중', CONNECTED: '연결됨', STOPPED: '중지', FAILED: '실패', COMPLETED: '완료', VALID: '유효', INVALID: '오류', LOADED: '로드됨' };
+  const kind = ['FAILED', 'INVALID'].includes(state) ? 'alarm' : state === 'RECONNECTING' ? 'warn' : ['RUNNING', 'CONNECTED'].includes(state) ? 'run' : 'idle';
+  return el('span', { class: `state ${kind}` }, el('span', { class: 'lamp', 'aria-hidden': 'true' }), names[state] || state || '확인 중');
+};
 export function field(label, value = '', options = {}) {
   const input = el('input', { type: 'text', value, ...options });
+  if (/topic/i.test(label)) input.setAttribute('list', 'known-topics');
+  if (/message\s*id/i.test(label)) input.setAttribute('list', 'known-message-ids');
   const node = el('label', { class: 'field' }, el('span', {}, label), input);
   return { node, input, get value() { return input.value; }, set value(value) { input.value = value ?? ''; } };
 }
@@ -44,9 +51,9 @@ export function check(label, initial = false) {
   return { node: el('label', { class: 'check' }, input, label), input, get value() { return input.checked; } };
 }
 export function page(root, title, description, action) {
-  root.append(el('div', { class: 'page-head' }, el('div', {}, el('div', { class: 'eyebrow' }, 'SIMULATOR / CONTROL CENTER'), el('h1', {}, title), el('div', { class: 'muted' }, description)), action));
+  root.append(el('div', { class: 'page-head' }, el('h1', {}, title), action));
 }
-export function panel(title, ...children) { return el('section', { class: 'panel' }, el('h2', {}, title), ...children); }
+export function panel(title, ...children) { return el('fieldset', { class: 'panel' }, el('legend', {}, title), ...children); }
 export function resultBox() {
   const node = el('div', { class: 'result', 'aria-live': 'polite' });
   return { node, show(value) { node.replaceChildren(code(value)); }, clear() { node.replaceChildren(); } };
@@ -63,15 +70,16 @@ export function toast(message, error = false) {
 }
 export function errorBox() {
   const node = el('div', { class: 'error', role: 'alert', hidden: true });
-  return { node, clear() { node.hidden = true; node.textContent = ''; }, show(error) {
+  return { node, clear() { node.hidden = true; node.textContent = ''; }, show(error, operation = '') {
     if (error.name === 'AbortError') return;
-    node.hidden = false; node.textContent = errorText(error); toast(node.textContent, true);
+    const guidance = error.status === 502 ? '브로커 주소와 연결 상태를 확인하세요.' : error.status === 409 ? '실행 ID와 현재 상태를 확인하세요.' : error.status === 404 ? '대상과 서버 기능을 확인하세요.' : '입력 값과 JSON 오류 위치를 확인하세요.';
+    node.hidden = false; node.textContent = `${operation ? `${operation} 실패\n` : ''}${errorText(error)}\n${guidance}`; toast(node.textContent, true);
   } };
 }
 export async function action(control, errors, callback) {
   if (control.disabled) return;
   control.disabled = true; errors.clear();
-  try { await callback(); } catch (error) { errors.show(error); }
+  try { await callback(); } catch (error) { errors.show(error, control.textContent); }
   finally { control.disabled = false; }
 }
 export function actionButton(label, errors, callback, kind = '') {
@@ -81,8 +89,38 @@ export function actionButton(label, errors, callback, kind = '') {
 export function metrics(values) {
   return el('div', { class: 'metrics' }, Object.entries(values).map(([label, value]) => el('div', {}, label, el('strong', {}, value ?? '—'))));
 }
-export function table(headers, rows) {
-  return el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, headers.map(x => el('th', { scope: 'col' }, x)))), el('tbody', {}, rows.map(row => el('tr', {}, row.map(cell => el('td', {}, cell)))))));
+export function primaryAction(node, control) { node.dataset.primaryGroup = 'true'; control.dataset.primary = 'true'; }
+export async function confirmAction(name, operation = '삭제') {
+  const dialog = el('dialog', { class: 'confirm-dialog', 'aria-label': `${operation} 확인` });
+  return new Promise(resolve => {
+    const finish = value => { dialog.close(); dialog.remove(); resolve(value); };
+    dialog.append(el('h2', {}, `${operation} 확인`), el('p', {}, name), el('div', { class: 'actions' }, button('취소', () => finish(false)), button(operation, () => finish(true), 'danger')));
+    dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
+    document.body.append(dialog); dialog.showModal(); dialog.querySelector('button').focus();
+  });
+}
+export async function copyText(value) {
+  try { await navigator.clipboard.writeText(value); toast('복사했습니다.'); }
+  catch { throw new Error(`복사할 내용을 선택해 직접 복사하세요.\n${value}`); }
+}
+export function table(headers, rows, onSelect) {
+  const body = el('tbody');
+  rows.forEach((row, index) => {
+    const node = el('tr', {}, row.map(cell => el('td', {}, cell)));
+    if (onSelect) {
+      node.tabIndex = 0; node.classList.add('selectable-row');
+      const select = () => {
+        for (const sibling of body.children) sibling.setAttribute('aria-selected', String(sibling === node));
+        onSelect(index);
+      };
+      node.addEventListener('click', event => { if (!event.target.closest('button,input,a')) select(); });
+      node.addEventListener('keydown', event => { if (event.target === node && ['Enter', ' '].includes(event.key)) { event.preventDefault(); select(); } });
+    }
+    if (node.querySelector('.state.alarm')) node.classList.add('alarm-row');
+    if (node.querySelector('.state.warn')) node.classList.add('warn-row');
+    body.append(node);
+  });
+  return el('div', { class: 'table-wrap' }, el('table', {}, el('thead', {}, el('tr', {}, headers.map(x => el('th', { scope: 'col' }, x)))), body));
 }
 export function numeric(input, label, min = 0, max = Infinity) {
   const raw = input.value;
@@ -94,23 +132,24 @@ export function jsonEditor(label, initial = {}, rows = 12) {
   const id = `editor-${++sequence}`;
   const textarea = el('textarea', { id, rows, value: typeof initial === 'string' ? initial : pretty(initial), spellcheck: false, 'aria-describedby': `${id}-status` });
   const status = el('div', { class: 'editor-status', id: `${id}-status`, 'aria-live': 'polite' });
-  const node = el('div', { class: 'editor' }, el('label', { htmlFor: id }, label), textarea, status);
+  const format = button('정렬', () => { if (validate()) { textarea.value = pretty(JSON.parse(textarea.value)); textarea.dispatchEvent(new Event('input', { bubbles: true })); } }, 'small');
+  const node = el('div', { class: 'editor' }, el('div', { class: 'panel-head' }, el('label', { htmlFor: id }, label), format), textarea, status);
   function validate() {
     try { JSON.parse(textarea.value); status.textContent = 'JSON 문법 정상'; node.classList.remove('invalid'); textarea.setAttribute('aria-invalid', 'false'); return true; }
-    catch (error) { status.textContent = error.message; node.classList.add('invalid'); textarea.setAttribute('aria-invalid', 'true'); return false; }
+    catch (error) { status.textContent = `${jsonErrorPosition(textarea.value, error)} ${error.message}`; node.classList.add('invalid'); textarea.setAttribute('aria-invalid', 'true'); return false; }
   }
   textarea.addEventListener('input', validate); validate();
   return { node, textarea, get() { if (!validate()) throw new Error(`${label}: ${status.textContent}`); return JSON.parse(textarea.value); },
-    set(value) { textarea.value = pretty(value); validate(); }, validate };
+    set(value) { textarea.value = pretty(value); textarea.dispatchEvent(new Event('input', { bubbles: true })); }, validate };
 }
 export function tokenHelp(editor) {
   const tokens = [['seq', '{{seq}}'], ['now', '{{now}}'], ['now 형식', "{{now:yyyy-MM-dd'T'HH:mm:ss}}"], ['uuid', '{{uuid}}'], ['random', '{{random:Integer:1..10}}'], ['walk', '{{walk:20:10..30:0.5}}'], ['cycle', '{{cycle:OK|WARN}}'], ['pick', '{{pick:A|B}}']];
-  return el('details', {}, el('summary', {}, '토큰 도움말 · 예시 삽입'), help('문자열 전체가 토큰이면 숫자·불리언 타입을 유지합니다. 삽입 위치를 선택한 후 누르세요. 문자열 밖에서는 따옴표를 함께 삽입합니다.'), el('div', { class: 'token-grid' }, tokens.map(([name, token]) => button(name, () => {
+  return el('details', {}, el('summary', {}, '토큰 도움말   예시 삽입'), help('문자열 전체가 토큰이면 숫자·불리언 타입을 유지합니다. 삽입 위치를 선택한 후 누르세요. 문자열 밖에서는 따옴표를 함께 삽입합니다.'), el('div', { class: 'token-grid' }, tokens.map(([name, token]) => button(name, () => {
     const area = editor.textarea;
     const prefix = area.value.slice(0, area.selectionStart);
     let inside = false, escaped = false;
     for (const char of prefix) { if (escaped) escaped = false; else if (char === '\\') escaped = true; else if (char === '"') inside = !inside; }
     area.setRangeText(inside ? token : JSON.stringify(token), area.selectionStart, area.selectionEnd, 'end');
-    editor.validate(); area.focus();
+    area.dispatchEvent(new Event('input', { bubbles: true })); area.focus();
   }, 'small'))));
 }
