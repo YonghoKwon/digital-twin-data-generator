@@ -383,3 +383,6 @@ UE DTCore API 테스트를 위한 `/mock/**` 서빙과 `/mock-admin` 관리 API�
 `mock-routes/*.json`에 경로별 응답·템플릿·지연·순차 응답·오류를 정의하며 호출 기록은 메모리에 보관합니다.
 Swagger의 `REST Mock Admin` 태그에서 route CRUD/reload와 DataTable import를 실행할 수 있습니다.
 설정·JSON 스키마·UE 연결·테스트 방법은 [REST Mock 가이드](docs/rest-mock.md), 요청 예시는 [rest-mock.http](src/main/rest-mock.http)를 참고하세요.
+시작 파일이 잘못되어도 빈 route로 기동하며 `GET /mock-admin/status`에서 route 수와 마지막 로드 결과를 확인합니다. 수동 reload 실패는 400으로 반환하고 기존 route/순번을 유지합니다.
+DTCore import는 ApiUrl 앞 `/`를 보완하고 query를 제거하며 잘못된 행을 `invalid`(id·reason)로 보고합니다. 정확 경로, `**` 없는 패턴, `**` 패턴 순으로 우선 매칭합니다.
+TRACE route 등록은 400, TRACE 요청은 405입니다. 등록 후 bodyFile 읽기 실패는 500 `MOCK_BODY_FILE_UNREADABLE`과 routeId를 반환합니다.

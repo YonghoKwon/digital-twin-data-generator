@@ -31,15 +31,15 @@ DTCore는 연결 실패와 5xx에서 재시도하므로 `/api/unstable`의 기�
 | `simulator.mock.base-path` | `/mock` | 서빙 prefix. 루트 `/`, 패턴, 끝 `/`, `/mock-admin` 하위는 불가 |
 | `simulator.mock.routes-dir` | `./mock-routes` | 실행 작업 디렉터리 기준 route 폴더 |
 | `simulator.mock.journal-size` | `1000` | 메모리에 보관할 최근 호출 수, 1 이상 |
-| `simulator.mock.max-delay-ms` | `60000` | 고정/랜덤 지연의 허용 상한, 0 이상 |
+| `simulator.mock.max-delay-ms` | `60000` | 고정/랜덤 지연의 허용 상한, 0~9223372036854775806 (`max + 1` 오버플로 방지) |
 
-base-path 자체 요청은 route path `/`와 매칭합니다. `/mock-admin`은 base-path와 별도로 고정되어 있습니다. GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS/TRACE 및 사용자 정의 method를 정확히 구분합니다. HEAD는 body 없이 헤더만 전송하며 204/205/304도 body를 전송하지 않습니다.
+base-path 자체 요청은 route path `/`와 매칭합니다. `/mock-admin`은 base-path와 별도로 고정되어 있습니다. GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS 및 사용자 정의 method를 정확히 구분합니다. HEAD는 body 없이 헤더만 전송하며 204/205/304도 body를 전송하지 않습니다. TRACE route 등록은 400으로 거부하고 TRACE 요청은 405를 반환합니다.
 
-서빙은 OncePerRequestFilter로 처리해 MVC의 자동 OPTIONS 처리를 피합니다. 기본 Tomcat의 TRACE 차단도 mock prefix에 한해 허용하며 prefix 밖 TRACE는 405를 유지합니다.
+서빙은 OncePerRequestFilter로 처리해 MVC의 자동 OPTIONS 처리를 피합니다. Tomcat의 기본 TRACE 차단을 유지하며 connector/valve로 TRACE를 활성화하지 않습니다. mock 필터도 TRACE를 405로 거부해 요청 헤더 반사를 방지합니다.
 
 ## Route JSON
 
-각 `*.json` 파일의 최상위는 단일 route object 또는 route 배열입니다. 폴더가 없으면 빈 상태로 기동합니다. 최상위 폴더의 `.json` 파일을 파일명 순서대로 읽고, 배열 순서를 등록 순서로 사용합니다. 응답용 JSON 파일은 `bodies/` 같은 하위 폴더에 두어 route 파일로 읽히지 않게 합니다.
+각 `*.json` 파일의 최상위는 단일 route object 또는 route 배열입니다. 폴더가 없으면 빈 상태로 기동합니다. 시작 시 파일 로드/검증에 실패해도 앱은 빈 route로 기동하며 실패 파일명·사유를 ERROR 로그와 `GET /mock-admin/status`에 남깁니다. 최상위 폴더의 `.json` 파일을 파일명 순서대로 읽고, 배열 순서를 등록 순서로 사용합니다. 응답용 JSON 파일은 `bodies/` 같은 하위 폴더에 두어 route 파일로 읽히지 않게 합니다.
 
 ```json
 {
@@ -64,12 +64,12 @@ base-path 자체 요청은 route path `/`와 매칭합니다. `/mock-admin`은 b
 | 필드 | 규칙 / 기본값 |
 | --- | --- |
 | `id` | 필수, 고유. 영문/숫자/`_`/`-`/`.` 1~200자 |
-| `method` | 필수 HTTP method, 대문자로 정규화. `*`도 문자 그대로의 method이며 전체 method alias가 아님 |
+| `method` | 필수 HTTP method, 대문자로 정규화. TRACE는 400으로 거부. `*`도 문자 그대로의 method이며 전체 method alias가 아님 |
 | `path` | 필수, base-path를 제외한 `/` 시작 경로. `{coilId}` segment 변수와 Ant 형식 `**`(0개 이상 segment), `*` 지원. 쿼리/fragment 제외 |
 | `status` | 최종 HTTP status 200~599, 기본 200 |
 | `headers` | 응답 헤더 map. 헤더명/제어문자/Content-Type 검증. Content-Length, Transfer-Encoding, Connection은 서버가 관리 |
 | `body` | JSON 또는 text를 담은 **문자열**. 미지정 시 `{}`. object 입력은 문자열로 바인딩되지 않아 400 |
-| `bodyFile` | body 대신 쓸 UTF-8 상대 파일 경로. routes-dir 내부의 기존 파일만 허용. 절대 경로, 경로 탈출, 외부 symlink/junction 차단. 등록 및 매 요청 시 검사 |
+| `bodyFile` | body 대신 쓸 UTF-8 상대 파일 경로. routes-dir 내부의 기존 파일만 허용. 절대 경로, 경로 탈출, 외부 symlink/junction 차단. 등록 시 검증 실패는 400, 등록 후 누락/읽기 실패는 500 |
 | `delayMs` | 고정 지연, 기본 0. 0~max-delay-ms |
 | `delayMinMs`, `delayMaxMs` | 두 값을 함께 지정. 0 ≤ min ≤ max ≤ max-delay-ms, 양 끝 포함 랜덤 지연. delayMs와 동시에 사용 불가 |
 | `responses` | 응답 object 목록. 각 object에 status/headers/body 또는 bodyFile/delay 필드 지정 가능. 생략/빈 배열은 route 기본 응답 |
@@ -79,7 +79,7 @@ base-path 자체 요청은 route path `/`와 매칭합니다. `/mock-admin`은 b
 
 `responses`의 빠진 필드는 route 값을 상속합니다. headers는 대소문자를 구분하지 않고 합칩니다. body/bodyFile 중 하나를 override하면 두 필드의 기존 설정을 함께 대체합니다. delay 필드 중 하나를 override하면 route delay 설정 전체를 대체하므로 랜덤 delay는 min/max를 모두 지정합니다. fault 응답에도 템플릿을 적용합니다.
 
-매칭 우선순위는 **정확한 경로 → 변수/와일드카드가 적은 패턴 → 등록 순서**입니다. `{name}`, `*`, `**`는 각각 한 개로 계산합니다. `**`로 잡힌 부분은 이름이 없으므로 `path.*` 템플릿 변수로 제공되지 않습니다. 매칭 실패는 404입니다.
+매칭 우선순위는 **정확한 경로 → `**` 없는 패턴(`{name}`·`*` 합계가 적은 순) → `**` 패턴(`{name}` 변수가 적은 순) → 등록 순서**입니다. 따라서 `/api/**`를 먼저 등록해도 `/api/{line}/{coil}`이 매칭되면 후자가 이깁니다. 같은 우선순위·개수일 때는 등록 순서를 유지합니다. `**` 패턴끼리는 `*`·`**` 개수로 순서를 바꾸지 않습니다. `**`로 잡힌 부분은 이름이 없으므로 `path.*` 템플릿 변수로 제공되지 않습니다. 매칭 실패는 404입니다.
 
 ```json
 {"error":"NO_MOCK_ROUTE","method":"GET","path":"/unknown"}
@@ -110,7 +110,7 @@ route마다 호출 순번을 `AtomicLong`으로 증가시켜 동시 요청에서
 {"body":"{\"label\":\"{{query.label}}\",\"count\":{{seq}},\"temperature\":{{random:Integer:10..20}}}"}
 ```
 
-잘못된 날짜/랜덤 문법은 등록 시 400입니다. bodyFile 내용을 변경하면 다음 호출부터 읽고, 변경된 파일의 템플릿 실행 오류는 500 `MOCK_RENDER_ERROR`, 파일 누락/탈출은 400 `INVALID_MOCK_ROUTE`가 됩니다.
+잘못된 날짜/랜덤 문법은 등록 시 400입니다. bodyFile 내용을 변경하면 다음 호출부터 읽습니다. 변경된 파일의 템플릿 실행 오류는 500 `MOCK_RENDER_ERROR`이며 route id·method·path와 예외 스택을 WARN 로그에 남깁니다. 요청/응답 본문과 헤더 원문은 이 로그에 넣지 않습니다. 등록 후 파일 누락, 읽을 수 없는 UTF-8, 경로 탈출 등은 500 `{"error":"MOCK_BODY_FILE_UNREADABLE","routeId":"해당-id"}`와 WARN 로그를 반환합니다. 관리 API 등록 시의 파일 검증 실패는 계속 400입니다.
 
 ## 관리 API
 
@@ -118,6 +118,7 @@ Swagger `/swagger` 또는 `/swagger-ui/index.html`의 **REST Mock Admin** 태그
 
 | Method / path | 동작 |
 | --- | --- |
+| `GET /mock-admin/status` | 현재 route 수와 마지막 시작 로드/reload 시각·성공 여부·오류 메시지 |
 | `GET /mock-admin/routes` | 전체 route 정의 |
 | `GET /mock-admin/routes/{id}` | 단일 조회, 없으면 404 |
 | `POST /mock-admin/routes` | 추가, 201. 중복 id는 400 |
@@ -130,7 +131,18 @@ Swagger `/swagger` 또는 `/swagger-ui/index.html`의 **REST Mock Admin** 태그
 | `DELETE /mock-admin/requests` | 기록 비우기, 204 |
 | `POST /mock-admin/import/dtcore-api-table?overwrite=false` | UE DataTable JSON 배열로 route stub 생성 |
 
-관리 API 변경은 파일에 저장되지 않습니다. 재시작/reload 시 파일 정의로 돌아갑니다. 잘못된 시작 파일은 기동을 실패시켜 알려줍니다. reload 중 요청은 기존 또는 새 snapshot으로 처리합니다. mock 호출은 일반 request/response body logging 필터보다 먼저 처리하며 journal에만 기록합니다. 관리 API 자체는 journal에 기록하지 않습니다.
+관리 API 변경은 파일에 저장되지 않습니다. 재시작/reload 시 파일 정의로 돌아갑니다. 시작 로드 실패는 빈 route로 기동하고, 수동 reload 실패는 400과 함께 기존 route/순번을 유지합니다. reload 중 요청은 기존 또는 새 snapshot으로 처리합니다. mock 호출은 일반 request/response body logging 필터보다 먼저 처리하며 journal에만 기록합니다. 관리 API 자체는 journal에 기록하지 않습니다.
+
+`GET /mock-admin/status` 응답 예시입니다. `routeCount`는 비활성 route를 포함한 현재 등록 수이며, 나머지는 마지막 파일 로드 시도의 결과입니다. CRUD/import는 이 로드 결과를 바꾸지 않습니다. 파일을 수정하고 reload에 성공하면 `lastReloadSuccessful=true`, `lastReloadError=null`로 바뀝니다. `lastReloadAt`은 시도 시작 시각(UTC ISO)입니다. 폴더가 없을 때의 빈 로드는 성공입니다.
+
+```json
+{
+  "routeCount": 0,
+  "lastReloadAt": "2026-11-08T00:00:00Z",
+  "lastReloadSuccessful": false,
+  "lastReloadError": "Cannot load route file 'broken.json': invalid route JSON"
+}
+```
 
 기록 필드는 `timestamp`(UTC ISO), `method`, `path`(base-path 제외), `query`, `headers`, `body`, `routeId`(미매칭이면 null), `status`, `delayMs`(선택된 지연), `elapsedMillis`입니다. 요청 헤더는 처음 32개, 값은 각 512 bytes로 제한합니다. Authorization, Cookie, API key, token/secret/password 관련 헤더는 `****`로 마스킹합니다. query와 body에도 민감 필드 마스킹과 기존 `SensitiveLogMasker.mask(...)`를 적용합니다. body와 query는 각각 UTF-8 4096 bytes까지만 보관하며 잘린 다중 바이트 문자를 남기지 않습니다. journal은 응답 생성 완료 시 기록합니다.
 
@@ -143,15 +155,18 @@ POST /mock-admin/import/dtcore-api-table
 Content-Type: application/json
 
 [
-  {"Name":"GetCoil","ApiMethod":"EApiMethod::Get","ApiUrl":"/api/coil/{coilId}","ApiResource":"Coil","ApiAction":"Get"},
-  {"Name":"SetStatus","ApiMethod":"POST","ApiUrl":"/api/coil/{coilId}/status"}
+  {"Name":"GetCoil","ApiMethod":"EApiMethod::Get","ApiUrl":"api/coil/{coilId}?view=full","ApiResource":"Coil","ApiAction":"Get"},
+  {"Name":"SetStatus","ApiMethod":"POST","ApiUrl":"/api/coil/{coilId}/status"},
+  {"Name":"BadRoute","ApiMethod":"TRACE","ApiUrl":"/api/trace"}
 ]
 ```
 
-필드 이름 대소문자를 무시하고 ApiMethod의 마지막 `::` 앞 enum prefix를 제거합니다. `Name`, `ApiMethod`, `ApiUrl`이 필요합니다. 다른 필드는 허용하되 서버 매칭에 사용하지 않습니다. `id=dtcore-<Name>`, body 문자열 `{}`, status 200, enabled true로 생성합니다. id 문자 제약은 일반 route와 같습니다. 기존 id는 기본적으로 건너뛰고 `overwrite=true`일 때 전체 교체합니다. 입력 전체 검증 실패 시 부분 import하지 않습니다.
+필드 이름 대소문자를 무시하고 ApiMethod의 마지막 `::` 앞 enum prefix를 제거합니다. `Name`, `ApiMethod`, `ApiUrl`이 필요합니다. `ApiUrl`은 첫 `?`와 그 뒤 query를 제거하고, 앞 `/`가 없으면 붙여 path만 사용합니다. 빈 path, fragment, 잘못된 method/id/pattern 등은 정규화 후 검증합니다. 다른 필드는 허용하되 서버 매칭에 사용하지 않습니다. `id=dtcore-<Name>`, body 문자열 `{}`, status 200, enabled true로 생성합니다. id 문자 제약은 일반 route와 같습니다.
+
+기존 id(같은 요청에서 이미 성공한 id 포함)는 기본적으로 `skipped`에 넣고, `overwrite=true`일 때 전체 교체합니다. 잘못된 행은 `invalid`의 `{id, reason}`으로 반환하며 다른 유효한 행은 계속 import합니다(HTTP 200). Name이 없거나 object가 아닌 행의 id는 `row-<1부터 시작하는 행 번호>`입니다. 실패한 overwrite는 기존 route를 유지합니다. 최상위가 배열이 아니면 전체 요청을 400으로 거부합니다.
 
 ```json
-{"imported":["dtcore-GetCoil","dtcore-SetStatus"],"skipped":[]}
+{"imported":["dtcore-GetCoil","dtcore-SetStatus"],"skipped":[],"invalid":[{"id":"dtcore-BadRoute","reason":"TRACE routes are not supported"}]}
 ```
 
 ## 예시와 검증
@@ -163,7 +178,8 @@ curl -i http://localhost:18083/mock/api/coil/C001
 curl -i -X POST http://localhost:18083/mock/api/coil/C001/status -H 'Content-Type: application/json' --data-raw '{"status":"STOPPED"}'
 curl -i http://localhost:18083/mock/api/unstable
 curl 'http://localhost:18083/mock-admin/requests?limit=10'
+curl http://localhost:18083/mock-admin/status
 ./mvnw -B test
 ```
 
-신규 테스트는 RANDOM_PORT 컨텍스트에서 MockMvc와 실제 HTTP를 사용합니다. 우선순위, 템플릿 escape, 응답 순환/동시 순번, fault 0/1, 작은 지연, journal 제한/마스킹, bodyFile 경로 탈출, import overwrite, 시작 로드/reload, Swagger 노출과 모든 method 처리를 외부 브로커 없이 검증합니다.
+신규 테스트는 RANDOM_PORT 컨텍스트에서 MockMvc와 실제 HTTP를 사용합니다. `**` 우선순위, 템플릿 escape/렌더 실패 로그, 응답 순환/동시 순번, fault 0/1, 작은 지연과 경계값, journal 제한/마스킹, bodyFile 경로 탈출/등록 후 읽기 실패, import 정규화/invalid/overwrite, 시작 실패/status/reload 복구, Swagger 노출, TRACE 거부와 나머지 method 처리를 외부 브로커 없이 검증합니다.

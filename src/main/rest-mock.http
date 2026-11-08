@@ -18,6 +18,10 @@ GET {{host}}/mock-admin/requests?limit=10
 ### Routes
 GET {{host}}/mock-admin/routes
 
+### File load status: routeCount, lastReloadAt, lastReloadSuccessful, lastReloadError
+### Invalid startup files leave routes empty; fix the file then reload below.
+GET {{host}}/mock-admin/status
+
 ### One route
 GET {{host}}/mock-admin/routes/coil-get
 
@@ -63,12 +67,14 @@ Content-Type: application/json
 POST {{host}}/mock-admin/routes/retry-demo/toggle
 
 ### Import UE DataTable JSON export; existing ids are skipped
+### ApiUrl gets a leading / and drops query; invalid rows return {id, reason} and valid rows continue.
 POST {{host}}/mock-admin/import/dtcore-api-table
 Content-Type: application/json
 
 [
-  {"Name":"GetCoil","ApiMethod":"EApiMethod::Get","ApiUrl":"/api/coil/{coilId}","ApiResource":"Coil","ApiAction":"Get"},
-  {"Name":"SetStatus","ApiMethod":"POST","ApiUrl":"/api/coil/{coilId}/status"}
+  {"Name":"GetCoil","ApiMethod":"EApiMethod::Get","ApiUrl":"api/coil/{coilId}?view=full","ApiResource":"Coil","ApiAction":"Get"},
+  {"Name":"SetStatus","ApiMethod":"POST","ApiUrl":"/api/coil/{coilId}/status"},
+  {"Name":"BadRoute","ApiMethod":"TRACE","ApiUrl":"/api/trace"}
 ]
 
 ### Import with overwrite
@@ -81,7 +87,11 @@ Content-Type: application/json
 DELETE {{host}}/mock-admin/routes/retry-demo
 
 ### Reload all definitions from routes-dir (discards in-memory edits)
+### Failure returns 400, keeps routes/sequences, and updates /mock-admin/status.
 POST {{host}}/mock-admin/routes/reload
+
+### TRACE requests return 405; TRACE route creation/import is rejected.
+TRACE {{host}}/mock/api/coil/C001
 
 ### Clear request journal
 DELETE {{host}}/mock-admin/requests
