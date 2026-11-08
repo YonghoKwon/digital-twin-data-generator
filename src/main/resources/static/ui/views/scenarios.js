@@ -51,7 +51,7 @@ export default function scenarios(root, scope) {
     try {
       const values = await scope.request('/dt/scenarios'); if (!scope.alive) return; availability(true);
       library.replaceChildren(values.length ? table(['파일 / 이름', '길이', '유효성', ''], values.map(value => [
-        el('div', {}, el('strong', {}, value.file), help(value.name || value.scenarioId), value.error ? el('div', { class: 'error' }, value.error) : null), `${value.durationMs ?? '—'} ms`, badge(value.valid ? 'COMPLETED' : 'FAILED'),
+        el('div', {}, el('strong', {}, value.file), help(value.name || value.scenarioId), value.error ? el('div', { class: 'error' }, value.error) : null), `${value.durationMs ?? '—'} ms`, badge(value.valid ? 'VALID' : 'INVALID'),
         actionButton('열기', errors, async () => { const body = await requireApi(`/dt/scenarios/${segment(value.file)}`); if (!scope.alive) return; file.value = value.file; editor.set(body); }, 'small')
       ])) : empty('저장된 시나리오가 없습니다. 예시 JSON을 검증하고 저장하세요.'));
     } catch (error) { if (error.status === 404) { availability(false); library.replaceChildren(empty('시나리오 기능이 아직 없는 서버')); } else errors.show(error); }
@@ -79,7 +79,7 @@ export default function scenarios(root, scope) {
       if (!seekDirty && document.activeElement !== seek) { seek.value = next.positionMs; progressText.textContent = `${(Math.min(1, Math.max(0, next.progress || 0)) * 100).toFixed(1)}% · ${next.positionMs} / ${next.durationMs}ms · 반복 ${next.loopCount}`; }
       seek.max = Math.max(1, next.durationMs);
       if (!dirty && document.activeElement !== speedInput.input) speedInput.value = next.speed;
-      stats.replaceChildren(metrics({ sent: next.sent, failed: next.failed, skipped: next.skipped, events: `${next.eventsDone}/${next.eventsTotal}`, mockOps: next.mockOps }));
+      stats.replaceChildren(metrics({ sent: next.sent, failed: next.failed, skipped: next.skipped, events: next.loopCount > 0 ? `${next.eventsDone} (누적)` : `${next.eventsDone}/${next.eventsTotal}`, mockOps: next.mockOps }));
       byTopicContent.textContent = JSON.stringify(next.byTopic || {}, null, 2);
       mark.textContent = `마지막 MARK: ${next.lastMark || '없음'}`; mark.className = 'help';
       lastError.hidden = !next.lastError; lastError.textContent = next.lastError || '';

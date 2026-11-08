@@ -54,6 +54,8 @@ class UiServingTest {
             String path = url.substring(url.indexOf("/static/ui/") + "/static".length());
             var response = mvc.perform(get(path)).andExpect(status().isOk()).andReturn().getResponse();
             assertThat(response.getContentType()).isIn("text/javascript", "application/javascript");
+            // 업데이트 후 브라우저가 이전 모듈을 쓰지 않도록 매번 재검증해야 한다.
+            assertThat(response.getHeader("Cache-Control")).contains("no-cache");
             String source = module.getContentAsString(StandardCharsets.UTF_8);
             assertThat(source).doesNotContain("innerHTML", "https://cdn.", "http://cdn.");
         }
