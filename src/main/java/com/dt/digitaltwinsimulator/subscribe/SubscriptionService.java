@@ -9,7 +9,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.*;
@@ -94,7 +93,7 @@ public class SubscriptionService implements SmartLifecycle {
         private final BrokerSettings settings;
         private final int bufferSize, maxBodyBytes;
         private final Deque<ReceivedMessage> buffer = new ArrayDeque<>();
-        private final Set<StreamClient> streams = ConcurrentHashMap.newKeySet();
+        private final Set<SubscriptionStreamClient> streams = ConcurrentHashMap.newKeySet();
         private volatile boolean stopped;
         private volatile String state = "CONNECTED", lastError;
         private Instant lastReceivedAt;
@@ -217,7 +216,7 @@ public class SubscriptionService implements SmartLifecycle {
                 if (buffer.size() >= bufferSize) buffer.removeFirst();
                 buffer.addLast(received);
             }
-            for (StreamClient stream : streams) stream.offer(received);
+            for (SubscriptionStreamClient stream : streams) stream.offer(received);
         }
 
         private synchronized Map<String, Object> summary() {
@@ -241,7 +240,7 @@ public class SubscriptionService implements SmartLifecycle {
 
         private synchronized SseEmitter stream() {
             if (stopped) throw new SubscriptionException(404, "SUBSCRIPTION_NOT_FOUND", "Subscription not found.");
-            var stream = new StreamClient();
+            var stream = new SubscriptionStreamClient(id, bufferSize, streams::remove);
             streams.add(stream);
             stream.start();
             return stream.emitter;
@@ -253,7 +252,7 @@ public class SubscriptionService implements SmartLifecycle {
             closeConnection();
             if (worker != null) try { worker.join(5000); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-            streams.forEach(StreamClient::close);
+            streams.forEach(SubscriptionStreamClient::close);
         }
 
         private synchronized void closeConnection() {
@@ -262,38 +261,6 @@ public class SubscriptionService implements SmartLifecycle {
             consumer = null; session = null; connection = null; factory = null;
         }
 
-        // Slow/disconnected SSE readers never hold up the JMS consumer or grow an unbounded queue.
-        private final class StreamClient {
-            private final SseEmitter emitter = new SseEmitter(0L);
-            private final BlockingQueue<ReceivedMessage> pending = new ArrayBlockingQueue<>(Math.min(bufferSize, 256));
-            private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
-            private Thread sender;
-            private void start() {
-                emitter.onCompletion(this::close);
-                emitter.onTimeout(this::close);
-                emitter.onError(e -> close());
-                sender = Thread.ofVirtual().name("subscription-sse-" + id).start(() -> {
-                    try {
-                        emitter.send(SseEmitter.event().name("ready").data(Map.of("subscriptionId", id)));
-                        while (!closed.get()) {
-                            var next = pending.poll(15, TimeUnit.SECONDS);
-                            if (next == null) emitter.send(SseEmitter.event().comment("keepalive"));
-                            else emitter.send(SseEmitter.event().id(Long.toString(next.seq())).name("message").data(next));
-                        }
-                    } catch (IOException | java.lang.IllegalStateException e) { close(); }
-                    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                    finally { close(); }
-                });
-            }
-            private void offer(ReceivedMessage message) { if (!closed.get() && !pending.offer(message)) close(); }
-            private void close() {
-                if (!closed.compareAndSet(false, true)) return;
-                streams.remove(this);
-                if (sender != null) sender.interrupt();
-                // complete() can wait on an in-flight socket write. Keep it off the JMS receiver.
-                Thread.ofVirtual().name("subscription-sse-close-" + id).start(emitter::complete);
-            }
-        }
     }
 
     private static boolean sensitive(String key) {
