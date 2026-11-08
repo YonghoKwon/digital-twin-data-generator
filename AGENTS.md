@@ -6,7 +6,7 @@
 
 이 프로젝트는 Spring Boot 기반 ActiveMQ Artemis 데이터 생성/전송 시뮬레이터입니다.
 
-기술 버전: Java 21, Spring Boot 4.1.2, springdoc-openapi 3.2.0, Apache Artemis Jakarta client 2.57.0 (`org.apache.artemis`).
+기술 버전: Java 21, Spring Boot 4.1.2, springdoc-openapi 3.2.0, Apache Artemis Jakarta client 2.44.0 (`org.apache.activemq`, 운영 브로커 2.44.0과 동일 버전으로 고정).
 JSON 처리는 Jackson 3 (`tools.jackson.*`)와 Spring이 주입하는 `JsonMapper`를 사용합니다.
 Jackson annotation 패키지는 `com.fasterxml.jackson.annotation`을 유지하며, `spring.jackson.use-jackson2-defaults=true`로 기존 JSON 기본 동작을 유지합니다.
 JPA/H2/Postgres, H2 콘솔과 개발용 `/test` API는 제외했습니다. 설정은 application.properties로 통합하며 virtual threads와 포트 8080을 유지합니다.
